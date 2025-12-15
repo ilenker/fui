@@ -1,8 +1,10 @@
-package main
+package prober
 
 import (
+	"fmt"
 	"time"
-	"github.com/ilenker/proberly/internal/calc"
+	"reflect"
+	"github.com/ilenker/prober/internal/calc"
 
 	tc "github.com/gdamore/tcell/v3"
 )
@@ -37,11 +39,12 @@ type Buffer struct {
 	OnMouseEvent	func(*tc.EventMouse)
 	OnClick			func()
 	OnUpdate		func()
+	Watch			struct{current any; previous any}
 }
 
 func (b *Buffer) textWrite(s string) {
 	//toks := strings.SplitAfter(s, " ")
-	toks := Tokenize(s)
+	toks := tokenize(s)
 	b.Toks = append(b.Toks, toks...)
 
 	// Just reflow everything everytime for now
@@ -51,6 +54,12 @@ func (b *Buffer) textWrite(s string) {
 
 
 func (b *Buffer) buttonWrite(s string) {
+	toks := tokenize(s)
+	b.Toks = append(b.Toks, toks...)
+
+	// Just reflow everything everytime for now
+	b.reflowLines()
+	b.buttonDraw()
 }
 
 
@@ -64,7 +73,7 @@ func (b *Buffer) textDraw() {
 		return
 	}
 	for i := b.View; i < len(b.Lines); i++ {
-		if i > b.H { break }
+		if i-b.View >= b.H { break }
 		span := b.Lines[i]
 		line := ""
 		for t := span.Start;
@@ -117,6 +126,27 @@ func (b *Buffer) reflowLines() {
 
 
 func (b *Buffer) buttonDraw() {
+	// Don't try rendering if the width is zero
+	if b.W <= 0 {
+		return
+	}
+	if len(b.Toks) == 0 {
+		return
+	}
+	for i := b.View; i < len(b.Lines); i++ {
+		if i > b.H { break }
+		span := b.Lines[i]
+		line := ""
+		for t := span.Start;
+			t <= span.End;
+			t++ {
+			line += b.Toks[t]
+		}
+		for x, r := range line {
+			y := i - b.View
+			scr.SetContent(b.X+x, b.Y + y, r, nil, b.Style)
+		}
+	}
 }
 
 
@@ -127,7 +157,7 @@ func (b *Buffer) textOnMouseEvent(ev *tc.EventMouse) {
 
 	defer func() {
 		mouse.Prev.Buttons = buttons
-		REDRAW = true
+		redraw = true
 		b.reflowLines()
 	}()
 
@@ -178,7 +208,7 @@ func (b *Buffer) buttonOnMouseEvent(ev *tc.EventMouse) {
 	mouse.Buttons = buttons
 
 	defer func() {
-		REDRAW = true
+		redraw = true
 	}()
 
 	switch buttons {
@@ -210,7 +240,7 @@ func (b *Buffer) Flash() {
 		t := time.NewTimer(time.Millisecond * 100)
 		<-t.C
 		b.Style = b.Style.Reverse(false)
-		REDRAW = true
+		redraw = true
 	}()
 }
 
@@ -275,7 +305,7 @@ func (b *Buffer) Clear() {
 var boxThin  = [6]rune{'┌', '┐', '└', '┘', '│', '─'}
 var boxThick = [6]rune{'┏', '┓', '┗', '┛', '┃', '━'}
 
-func (b *Buffer) Box() {
+func (b *Buffer) box() {
 	x, y, w, h := b.X, b.Y, b.W, b.H
 	rs := boxThin[:]
 	style := b.Style
@@ -307,7 +337,7 @@ func (b *Buffer) Box() {
 }
 
 
-func (b *Buffer) ClearBox() {
+func (b *Buffer) clearBox() {
 	x, y, w, h := b.X, b.Y, b.W, b.H
 	// Sides
 	style := tc.StyleDefault
@@ -329,7 +359,7 @@ func (b *Buffer) ClearBox() {
 
 
 // Struct makers -------------------------------------
-func newTextBuffer(x, y, w, h, size, id int) *Buffer {
+func NewTerminal(x, y, w, h int) *Buffer {
 	toks  := make([]string, 0)
 	lines := make([]struct{Start int; End int}, 1)
 	b := &Buffer{
@@ -346,18 +376,18 @@ func newTextBuffer(x, y, w, h, size, id int) *Buffer {
 	b.Write = b.textWrite
 	b.OnMouseEvent = b.textOnMouseEvent
 	b.OnUpdate = func(){}
-	b.Box()
+	b.box()
+	buffers = append(buffers, b)
+	id++
 	return b
 }
 
 func (b *Buffer) flash() {
 }
 
-func newButtonBuffer(onClick func(), x, y, w, h, size, id int) *Buffer {
-	if size < w*h {
-		size = w*h
-	}
-	toks  := make([]string, size)
+func NewButton(x, y int, label string, onClick func()) *Buffer {
+	toks  := make([]string, 1)
+	toks[0] = label
 	lines := make([]struct{Start int; End int}, 1)
 	b := &Buffer{
 		Type: Text,
@@ -365,8 +395,8 @@ func newButtonBuffer(onClick func(), x, y, w, h, size, id int) *Buffer {
 		Lines: lines,
 		X: x,
 		Y: y,
-		W: w,
-		H: h,
+		W: len(label),
+		H: 1,
 		ID: id,
 	}
 	b.Draw = b.buttonDraw
@@ -374,11 +404,46 @@ func newButtonBuffer(onClick func(), x, y, w, h, size, id int) *Buffer {
 	b.OnMouseEvent = b.buttonOnMouseEvent
 	b.OnClick = onClick
 	b.OnUpdate = func(){}
-	b.Box()
+	buffers = append(buffers, b)
+	b.box()
+	id++
 	return b
 }
 
-func Tokenize(s string) []string {
+func NewWatcher(x, y int, label string, v any) *Buffer {
+	toks      := make([]string, 1)
+	lines     := make([]struct{Start int; End int}, 1)
+	b := &Buffer{
+		Type: Button,
+		Toks: toks,
+		Lines: lines,
+		X: x,
+		Y: y,
+		H: 3,
+		ID: id,
+	}
+	b.Watch.current = v
+	b.Draw = b.buttonDraw
+	b.Write = b.buttonWrite
+	b.OnMouseEvent = b.buttonOnMouseEvent
+	b.OnUpdate = func(){
+		v := reflect.ValueOf(b.Watch.current)
+		if v.Elem() != b.Watch.previous {
+			b.Toks[0] = fmt.Sprintf("%s: %v", label, v.Elem())
+			b.Watch.previous = v.Elem().Interface()
+			b.Draw()
+		}
+	}
+	b.OnUpdate()
+	b.W = len(b.Toks[0])
+	b.OnClick = func(){}
+	buffers = append(buffers, b)
+	b.box()
+	id++
+	return b
+}
+
+func tokenize(s string) []string {
 	toks := make([]string, 0)
 
 	// Scan over every character in the string

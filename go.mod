@@ -1,4 +1,4 @@
-module github.com/ilenker/proberly
+module github.com/ilenker/prober
 
 go 1.25
 
