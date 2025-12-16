@@ -9,14 +9,14 @@ import (
 
 /*······················································································kVec2    */
 type Vec2 struct {
-	x int
-	y int
+	X int
+	Y int
 }
 
 func (v1 Vec2) AddNoWrap(v2 Vec2) Vec2 {
 	return Vec2{
-		x: v1.x + v2.x,
-		y: v1.y + v2.y,
+		X: v1.X + v2.X,
+		Y: v1.Y + v2.Y,
 	}
 }
 
@@ -24,8 +24,8 @@ func (v1 Vec2) Translate(angleRad float64, distance float64) Vec2 {
     dx := distance * math.Cos(angleRad)
     dy := distance * math.Sin(angleRad)
     
-    newX := float64(v1.x) + dx
-    newY := float64(v1.y) + dy
+    newX := float64(v1.X) + dx
+    newY := float64(v1.Y) + dy
 
 	newVec := Vec2{int(math.Round(newX)), int(math.Round(newY))}
 
@@ -34,8 +34,8 @@ func (v1 Vec2) Translate(angleRad float64, distance float64) Vec2 {
 
 func Dist(v1, v2 Vec2) float64 {
 	return math.Sqrt(
-		math.Pow(float64(v1.x - v2.x), 2) +
-		math.Pow(float64(v1.y - v2.y), 2),
+		math.Pow(float64(v1.X - v2.X), 2) +
+		math.Pow(float64(v1.Y - v2.Y), 2),
 		)
 }
 
@@ -208,3 +208,12 @@ func FloatEq(a, b, ε float64) bool {
     return diff <= ε * math.Max(math.Abs(a), math.Abs(b))
 }
 
+
+// Assume int32 
+func Abs(n int) int {
+	value := int32(n)
+	temp := value >> 31     // make a mask of the sign bit
+	value ^= temp                   // toggle the bits if value is negative
+	value += temp & 1             // add one if value was negative
+	return int(value)
+}

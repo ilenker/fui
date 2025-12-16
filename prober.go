@@ -2,7 +2,7 @@ package prober
 
 import (
 	"time"
-
+	"github.com/ilenker/prober/internal/calc"
 	tc "github.com/gdamore/tcell/v3"
 )
 
@@ -14,25 +14,48 @@ var tick *time.Ticker
 var hz = time.Second / 60
 var focusedIdx int
 var mouse struct{
-	X, Y int
-	Buttons tc.ButtonMask
-	Prev struct{
-		X, Y int
-		Buttons tc.ButtonMask
+	x, y int
+	mask tc.ButtonMask
+	prev struct{
+		x, y int
+		mask tc.ButtonMask
 	}
-	Moved bool
 }
-var id int
 
+//   - Increments whenever a buffer is made.
+//   - Provides unique id that corresponds
+//   - to it's index in the slice of buffers.
+//~~~
+var newID int
+var scrW  int
+var scrH  int
+
+var nextButtonPos   calc.Vec2
+var nextTerminalPos calc.Vec2
+var nextWatcherPos  calc.Vec2
 // Global states
-var redraw  bool
-var exit    bool
+var (
+	redraw  bool
+	exit    bool
+	active  bool
+)
 
 func Init() {
+	setCOLORTERM()
 	scr, _ = tc.NewScreen()
 	scr.Init()
 	scr.EnableMouse()
 	stdin = scr.EventQ()
+	active = true
+	initStyles()
+
+	scrW, scrH = scr.Size()
+	nextButtonPos.X   = 3
+	nextButtonPos.Y   = scrH - 5
+	nextTerminalPos.X = 3
+	nextTerminalPos.Y = 2
+	nextWatcherPos.X  = scrW - 20
+	nextWatcherPos.Y  = 2
 
 	buffers = make([]*Buffer, 0, 8)
 	tick = time.NewTicker(hz)
@@ -41,7 +64,9 @@ func Init() {
 
 
 func Start() {
+	// Printf debugs on exit
 	defer scr.Fini()
+	defer restoreCOLORTERM()
 	go func() {
 		for {
 			ev := <-stdin
@@ -49,14 +74,19 @@ func Start() {
 				continue
 			}
 			if mev, ok := ev.(*tc.EventMouse); ok {
+				mouse.x, mouse.y = mev.Position()
+				mouse.mask = mev.Buttons()
 				for _, b := range buffers {
-					b.OnMouseEvent(mev)
+					b.OnHot(mev)
 				}
+				mouse.prev.x, mouse.prev.y = mev.Position()
+				mouse.prev.mask = mev.Buttons()
 			}
 			if key, ok := ev.(*tc.EventKey); ok {
 				if key.Key() == tc.KeyEsc {
 					exit = true
-					break
+					active = false
+					return
 				}
 				if focusedIdx == -1 {
 					continue
@@ -66,6 +96,9 @@ func Start() {
 	}()
 
 	for !exit {
+		if !active {
+			time.Sleep(time.Millisecond * 50)
+		}
 		<-tick.C
 		if redraw {
 			scr.Clear()
@@ -74,6 +107,12 @@ func Start() {
 		OnUpdateAll()
 		scr.Show()
 	}
+
+}
+
+func Resume() {
+	active = true
+	scr.Resume()
 }
 
 func OnUpdateAll() {
@@ -110,4 +149,3 @@ var text2 = "\nHello World Yes Hello World Yes\n"
 var text3 = "Hello  World  Yes\nHello World Yes\n"
 var text4 = " Hello World Yes\nHello World Yes\n"
 var text5 = "Hello World Yes\n\nHello World Yes\n"
-

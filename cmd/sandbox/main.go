@@ -5,24 +5,33 @@ import (
 	pbr "github.com/ilenker/prober"
 )
 
+var fooInt    = 0
+var fooFloat  = 0.0
+var fooString = "A"
+
 func main() {
-	foo := 0
 	pbr.Init()
-	term := pbr.NewTerminal(0, 0, 10, 10)
-	book := pbr.NewTerminal(18, 0, 15, 15)
+	fmt  := pbr.NewTerminal("fmt",)
+	book := pbr.NewTerminal("hobbit")
 	book.Write(hobbittext)
-	pbr.NewButton(3, 14, "Greet",
+	pbr.NewButton("Greet",
 		func() {
-			term.Write("Hello!\n")
-			foo++
+			fmt.Write("Hello!\n")
+			fooInt++
 		})
+	pbr.NewButton("NEXT", func(){})
+	pbr.NewButton("MORE", func(){})
+	pbr.NewButton("Very Wide Button", func(){})
 	go pbr.Start()
 
-	pbr.NewWatcher(25, 3, "Foo", &foo)
+	pbr.NewWatcher("int", &fooInt)
+	pbr.NewWatcher("flt", &fooFloat)
+	pbr.NewWatcher("str", &fooString)
 	for {
-		// Just looping here to keep progam open
-		time.Sleep(500 * time.Millisecond)
-		foo++
+		fooInt++
+		fooFloat  += 0.001
+		fooString += "A"
+		time.Sleep(time.Millisecond * 1000)
 	}
 
 }
