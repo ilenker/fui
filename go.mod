@@ -1,4 +1,4 @@
-module github.com/ilenker/prober
+module github.com/ilenker/fui
 
 go 1.25
 

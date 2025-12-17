@@ -195,6 +195,7 @@ func B2i(b bool) int {
 	return 0
 }
 
+// https://dev.to/chigbeef_77/bool-int-but-stupid-in-go-3jb3
 // Fast boolean to integer
 func FB2i(b bool) int {
     return int(*(*byte)(unsafe.Pointer(&b)))
@@ -209,11 +210,12 @@ func FloatEq(a, b, ε float64) bool {
 }
 
 
-// Assume int32 
+// https://stackoverflow.com/a/2074403
+//   - Assume int32
 func Abs(n int) int {
 	value := int32(n)
 	temp := value >> 31     // make a mask of the sign bit
-	value ^= temp                   // toggle the bits if value is negative
-	value += temp & 1             // add one if value was negative
+	value ^= temp           // toggle the bits if value is negative
+	value += temp & 1       // add one if value was negative
 	return int(value)
 }

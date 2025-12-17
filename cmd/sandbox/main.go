@@ -2,7 +2,7 @@ package main
 
 import (
 	"time"
-	pbr "github.com/ilenker/prober"
+	fui "github.com/ilenker/fui"
 )
 
 var fooInt    = 0
@@ -10,23 +10,23 @@ var fooFloat  = 0.0
 var fooString = "A"
 
 func main() {
-	pbr.Init()
-	fmt  := pbr.NewTerminal("fmt",)
-	book := pbr.NewTerminal("hobbit")
+	fui.Init()
+	fmt  := fui.NewTerminal("fmt",)
+	book := fui.NewTerminal("hobbit")
 	book.Write(hobbittext)
-	pbr.NewButton("Greet",
-		func() {
+	fui.NewButton("Greet",
+		func(b *fui.Box) {
 			fmt.Write("Hello!\n")
 			fooInt++
 		})
-	pbr.NewButton("NEXT", func(){})
-	pbr.NewButton("MORE", func(){})
-	pbr.NewButton("Very Wide Button", func(){})
-	go pbr.Start()
+	fui.NewButton("NEXT", func(b *fui.Box){})
+	fui.NewButton("MORE", func(b *fui.Box){})
+	fui.NewButton("Very Wide Button", func(b *fui.Box){})
+	go fui.Start()
 
-	pbr.NewWatcher("int", &fooInt)
-	pbr.NewWatcher("flt", &fooFloat)
-	pbr.NewWatcher("str", &fooString)
+	fui.NewWatcher("int", &fooInt)
+	fui.NewWatcher("flt", &fooFloat)
+	fui.NewWatcher("str", &fooString)
 	for {
 		fooInt++
 		fooFloat  += 0.001

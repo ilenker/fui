@@ -1,4 +1,4 @@
-package prober
+package fui
 
 import (
 	"os"

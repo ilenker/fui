@@ -1,15 +1,16 @@
-package prober
+package fui
 
 import (
+	"fmt"
 	"time"
-	"github.com/ilenker/prober/internal/calc"
+	"github.com/ilenker/fui/internal/calc"
 	tc "github.com/gdamore/tcell/v3"
 )
 
 var scr tc.Screen 
 var stDef = tc.StyleDefault
 var	stdin chan tc.Event
-var buffers []*Buffer
+var boxes []*Box
 var tick *time.Ticker
 var hz = time.Second / 60
 var focusedIdx int
@@ -21,10 +22,11 @@ var mouse struct{
 		mask tc.ButtonMask
 	}
 }
+var restoredLayout layout
 
-//   - Increments whenever a buffer is made.
+//   - Increments whenever a box is made.
 //   - Provides unique id that corresponds
-//   - to it's index in the slice of buffers.
+//   - to it's index in the slice of boxes.
 //~~~
 var newID int
 var scrW  int
@@ -35,12 +37,14 @@ var nextTerminalPos calc.Vec2
 var nextWatcherPos  calc.Vec2
 // Global states
 var (
-	redraw  bool
-	exit    bool
-	active  bool
+	redraw         bool
+	exit           bool
+	active         bool
+	restoreSuccess bool
 )
 
 func Init() {
+	var err error
 	setCOLORTERM()
 	scr, _ = tc.NewScreen()
 	scr.Init()
@@ -49,6 +53,7 @@ func Init() {
 	active = true
 	initStyles()
 
+	// Default layout settings
 	scrW, scrH = scr.Size()
 	nextButtonPos.X   = 3
 	nextButtonPos.Y   = scrH - 5
@@ -56,17 +61,33 @@ func Init() {
 	nextTerminalPos.Y = 2
 	nextWatcherPos.X  = scrW - 20
 	nextWatcherPos.Y  = 2
+	restoreSuccess, err = loadLayout()
+	if err != nil {
+		fmt.Printf("%w\n", err)
+	}
 
-	buffers = make([]*Buffer, 0, 8)
+	boxes = make([]*Box, 0, 8)
 	tick = time.NewTicker(hz)
-	RedrawAll()
 }
 
 
 func Start() {
 	// Printf debugs on exit
+	defer func() {
+		err := saveLayout()
+		if err != nil {
+			fmt.Printf("%w\n", err)
+		}
+	}()
 	defer scr.Fini()
 	defer restoreCOLORTERM()
+
+	if restoreSuccess {
+		applyRestoredLayout()
+	}
+	scr.Clear()
+	RedrawAll()
+
 	go func() {
 		for {
 			ev := <-stdin
@@ -76,7 +97,7 @@ func Start() {
 			if mev, ok := ev.(*tc.EventMouse); ok {
 				mouse.x, mouse.y = mev.Position()
 				mouse.mask = mev.Buttons()
-				for _, b := range buffers {
+				for _, b := range boxes {
 					b.OnHot(mev)
 				}
 				mouse.prev.x, mouse.prev.y = mev.Position()
@@ -110,25 +131,20 @@ func Start() {
 
 }
 
-func Resume() {
-	active = true
-	scr.Resume()
-}
-
 func OnUpdateAll() {
-	for _, b := range buffers {
+	for _, b := range boxes {
 		b.OnUpdate()
 	}
 }
 
 
 func RedrawAll() {
-	if len(buffers) == 0 {
+	if len(boxes) == 0 {
 		return
 	}
-	for _, b := range buffers {
+	for _, b := range boxes {
 		if focusedIdx != b.ID {
-			b.box()
+			b.border()
 			b.OnUpdate()
 			b.Draw()
 		}
@@ -137,10 +153,10 @@ func RedrawAll() {
 	if focusedIdx == -1 {
 		return
 	}
-	// Draw focused buffer last
-	buffers[focusedIdx].box()
-	buffers[focusedIdx].OnUpdate()
-	buffers[focusedIdx].Draw()
+	// Draw focused box last
+	boxes[focusedIdx].border()
+	boxes[focusedIdx].OnUpdate()
+	boxes[focusedIdx].Draw()
 }
 
 var text0 = "Hello World Yes\nHello World Yes\n"
