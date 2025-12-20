@@ -13,11 +13,10 @@
 !*.go
 !go.sum
 !go.mod
+!*.json
 
 !README.md
 !LICENSE
-
-# !Makefile
 
 # ...even if they are in subdirectories
 !*/
