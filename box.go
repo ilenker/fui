@@ -7,14 +7,17 @@ import (
 	"github.com/ilenker/fui/internal/calc"
 
 	tc "github.com/gdamore/tcell/v3"
+	rw "github.com/mattn/go-runewidth"
 )
 
-type BoxType int
+type boxType int
 
 const (
-	terminalT BoxType = iota
+	terminalT boxType = iota
 	buttonT
 	watcherT
+	fieldT
+	padT
 )
 
 type span struct {
@@ -23,221 +26,414 @@ type span struct {
 }
 
 type Box struct {
-	Toks    []string
-	Lines   []span
-	bufferType	BoxType
-	Name	string
+	toks    []string
+	lines   []span
+	boxType boxType
+	Name    string
 	view    int
 	X, Y    int
 	W, H    int
-	ID 		int
-	Prev struct{
+	cursor  struct {
+		X, Y int
+	}
+	id   int
+	prev struct {
 		X, Y int
 		W, H int
 	}
-	BorderStyle	tc.Style
-	BodyStyle	tc.Style
-	Write		func(s string)
-	Draw		func()
-	OnHot		func(*tc.EventMouse)
-	OnClick		func(*Box)
-	OnUpdate	func()
-	Watch		struct{current any; previous string}
+	dirty       bool
+	BorderStyle tc.Style
+	LabelStyle  tc.Style
+	BodyStyle   tc.Style
+	Write       func(s string)
+	Draw        func()
+	OnHot       func(*tc.EventMouse)
+	OnClick     func(*Box)
+	OnUpdate    func()
+	OnCR        func(*Box)
+	Watch       struct {
+		current  any
+		previous string
+	}
 }
 
+func (b *Box) restoreLayout() {
+	if !layoutLoadOK {
+		return
+	}
+	for j, entry := range restoredLayout {
+		if entry.Name == b.Name {
+			b.X = entry.X
+			b.Y = entry.Y
+			if entry.Type != int(buttonT) {
+				b.W = entry.W
+				b.H = entry.H
+			}
+			restoredLayout[j].Name = "^=_$" + entry.Name
+			b.reflowLines()
+			break
+		}
+	}
+}
+
+// _Write -------------------------------------------------------------------------------------
 func (b *Box) textWrite(s string) {
-	if !active {
-		fmt.Println(s)
-		return
-	}
 	toks := tokenize(s)
-	b.Toks = append(b.Toks, toks...)
+	b.toks = append(b.toks, toks...)
 
 	// Just reflow everything everytime for now
 	b.reflowLines()
+	// Stick view to bottom only
+	// if already at the bottom
+	if b.view == len(b.lines)-b.H-1 {
+		b.view = len(b.lines) - b.H
+	}
 	b.textDraw()
 }
 
-func (b *Box) Println(s string) {
-	if !active {
-		fmt.Println(s)
+func (b *Box) fieldWrite(s string) {
+	// This will always be one character
+	// until we implement copy paste
+	if len(s) == 0 {
 		return
 	}
 	toks := tokenize(s)
-	b.Toks = append(b.Toks, toks...)
-	b.Toks[len(b.Toks)-1] += "\n"
+	var lastTokI int
+	var lastCharI int
 
+	// If there are no tokens, add new and move on, no checks
+	if len(b.toks) == 0 {
+		b.toks = append(b.toks, toks...)
+		goto skipCheck
+	}
+
+	lastTokI = len(b.toks) - 1
+	lastCharI = len(b.toks[lastTokI]) - 1
+	// Last token was terminated - just append new tokens
+	if b.toks[lastTokI][lastCharI] == '\n' {
+		b.toks = append(b.toks, toks...)
+		// Last token unterminated - don't make new, add to it directly
+	} else {
+		b.toks[lastTokI] += toks[0]
+	}
+
+skipCheck:
 	// Just reflow everything everytime for now
 	b.reflowLines()
+	if s == "\n" {
+		b.view++
+		b.dirty = true
+	} else {
+		if b.view != len(b.lines)-1 {
+			b.view = len(b.lines) - 1
+			b.dirty = true
+		}
+	}
 	b.textDraw()
 }
 
-
-func (b *Box) terminalWrite(s string) {
-	if !active {
-		fmt.Println(s)
-		return
-	}
+func (b *Box) watcherWrite(s string) {
 	toks := tokenize(s)
-	b.Toks = append(b.Toks, toks...)
+	b.toks = append(b.toks, toks...)
 
 	// Just reflow everything everytime for now
-	//lines := len(b.Lines)
 	b.reflowLines()
-	//if len(b.Lines) > lines {
-	if len(b.Lines) > b.H {
-		b.view = len(b.Lines) - b.H
+	// Stick view to bottom only
+	// if already at the bottom
+	if b.view == len(b.lines)-b.H-1 {
+		b.view = len(b.lines) - b.H
 	}
-	//}
 	b.textDraw()
 }
-
 
 func (b *Box) buttonWrite(s string) {
 	toks := tokenize(s)
-	b.Toks = append(b.Toks, toks...)
-
-	// Just reflow everything everytime for now
+	b.toks = append(b.toks, toks...)
 	b.buttonDraw()
 }
 
+// _Draw -------------------------------------------------------------------------------------
 
-// Stages the entire buffer region.
 func (b *Box) textDraw() {
 	// Don't try rendering if the width is zero
 	if b.W <= 0 {
 		return
 	}
-	if len(b.Toks) == 0 {
+	if len(b.toks) == 0 {
 		return
 	}
-	for i := b.view; i < len(b.Lines); i++ {
-		if i-b.view >= b.H { break }
-		span := b.Lines[i]
-		line := ""
-		for t := span.Start;
-			t <= span.End;
-			t++ {
-			line += b.Toks[t]
+	for i := b.view; i < len(b.lines); i++ {
+		if i-b.view >= b.H {
+			break
 		}
-		for x, r := range line {
+		span := b.lines[i]
+		line := ""
+		for t := span.Start; t <= span.End; t++ {
+			line += b.toks[t]
+		}
+		x := 0
+		for _, r := range line {
 			y := i - b.view
 			if x >= b.W {
 				break
 			}
-			scr.SetContent(b.X+x, b.Y + y, r, nil, b.BodyStyle)
+			scr.SetContent(b.X+x, b.Y+y, r, nil, b.BodyStyle)
+			b.cursor.X = x
+			b.cursor.Y = y
+			if r > 255 {
+				x += rw.RuneWidth(r)
+			} else {
+				x++
+			}
 		}
 	}
 }
 
-
-func (b *Box) reflowLines() {
-	if len(b.Toks) == 0 {
-		return
-	}
-	b.Lines = b.Lines[:0]
-	chars := 0
-	start := 0
-
-	for i, tok := range b.Toks {
-		l := len(tok)
-		if l == 0 {
-			continue
+func (b *Box) blank() {
+	limitX := b.X + b.W + 2
+	limitY := b.Y + b.H + 2
+	for x := b.X - 1; x < limitX; x++ {
+		for y := b.Y - 1; y < limitY; y++ {
+			scr.SetContent(x, y, ' ', nil, stDimmed)
 		}
-		if (chars + l > b.W && i > start) {
-			newRange := span{start, i - 1}
-			b.Lines = append(b.Lines, newRange)
-			start = i
-			chars = 0
-		}
-		chars += l
-
-		if (tok[l-1] == '\n') {
-			newRange := span{start, i}
-			b.Lines = append(b.Lines, newRange)
-			start = i + 1
-			chars = 0
-		}
-	}
-	// Trailing line
-	if start < len(b.Toks) {
-		newRange := span{start, len(b.Toks) - 1}
-		b.Lines = append(b.Lines, newRange)
 	}
 }
 
+// Border
+var boxDefault = [7]rune{'┌', '┐', '└', '┘', '│', '─', '○'}
+var boxFocused = [7]rune{'┏', '┓', '┗', '┛', '┃', '━', '●'}
+
+func (b *Box) border() {
+	x, y, w, h := b.X, b.Y, b.W, b.H
+	var style tc.Style
+	var rs []rune
+
+	switch b.id {
+	case focusedIdx:
+		style = b.BorderStyle.Foreground(tc.ColorRed)
+		rs = boxFocused[:]
+	default:
+		style = b.BorderStyle
+		rs = boxDefault[:]
+	}
+	// Sides
+	f := calc.ILerp(0, len(b.lines), float64(b.view))
+	sliderPos := int(calc.Lerp(0, h, f))
+	for i := range h {
+		scr.SetContent(x-1, y+i, rs[4], nil, style)
+		scr.SetContent(x+w, y+i, rs[4], nil, style)
+	}
+	if b.boxType != buttonT {
+		scr.SetContent(x+w, y+sliderPos, '█', nil, style)
+	}
+	// Top
+	for i := range w {
+		scr.SetContent(x+i, y-1, rs[5], nil, style)
+	}
+	// Bottom
+	for i := range w {
+		scr.SetContent(x+i, y+h, rs[5], nil, style)
+	}
+	// Corners
+	switch b.boxType {
+	case buttonT:
+		scr.SetContent(x+w, y+h, rs[3], nil, style) // Bottom Right without handle
+	default:
+		scr.SetContent(x+w, y+h, rs[6], nil, style) // Bottom Right with handle
+	}
+	scr.SetContent(x-1, y-1, rs[6], nil, style) // Top Left with handle
+	scr.SetContent(x+w, y-1, rs[1], nil, style) // Top Right
+	scr.SetContent(x-1, y+h, rs[2], nil, style) // Bottom Left
+
+	// Label
+	switch b.boxType {
+	// TODO: add indicator for when you aren't at the bottom of the scroll
+	case watcherT:
+		last := len(b.toks) - 1
+		_y := y + h
+		i := 0
+		for _, r := range b.Name {
+			if i >= b.W {
+				scr.SetContent(x+i, _y, '…', nil, stDimmed)
+				return
+			}
+			scr.SetContent(x+i, _y, r, nil, b.LabelStyle)
+			i++
+		}
+		scr.SetContent(x+i, _y, '[', nil, stDimmed)
+		i++
+		for _, r := range b.toks[last] {
+			if i >= b.W {
+				scr.SetContent(x+i, _y, ']', nil, stDimmed)
+				break
+			}
+			scr.SetContent(x+i, _y, r, nil, b.LabelStyle)
+			i++
+		}
+		scr.SetContent(x+i, _y, ']', nil, stDimmed)
+	case buttonT:
+		// Do nothing
+	case padT:
+		for i, r := range b.Name {
+			if i >= b.W {
+				scr.SetContent(x+i, y-1, '…', nil, stDimmed)
+				return
+			}
+			scr.SetContent(x+i, y-1, r, nil, stDimmed)
+		}
+	default:
+		for i, r := range b.Name {
+			if i >= b.W {
+				scr.SetContent(x+i, y-1, '…', nil, stDimmed)
+				return
+			}
+			scr.SetContent(x+i, y-1, r, nil, b.BodyStyle)
+		}
+	}
+}
+
+func (b *Box) clearBorder() {
+	x, y, w, h := b.X, b.Y, b.W, b.H
+	// Sides
+	style := tc.StyleDefault
+	for i := range h {
+		scr.SetContent(x-1, y+i, ' ', nil, style)
+		scr.SetContent(x+w, y+i, ' ', nil, style)
+	}
+	// Top/Bottom
+	for i := range w {
+		scr.SetContent(x+i, y-1, ' ', nil, style)
+		scr.SetContent(x+i, y+h, ' ', nil, style)
+	}
+	// Corners
+	scr.SetContent(x-1, y-1, ' ', nil, style)
+	scr.SetContent(x+w, y-1, ' ', nil, style)
+	scr.SetContent(x-1, y+h, ' ', nil, style)
+	scr.SetContent(x+w, y+h, ' ', nil, style)
+}
 
 func (b *Box) buttonDraw() {
 	// Don't try rendering if the width is zero
 	if b.W <= 0 {
 		return
 	}
-	for x, r := range b.Name {
+	x := 0
+	for _, r := range b.Name {
 		scr.SetContent(b.X+x, b.Y, r, nil, b.BodyStyle)
-	}
-
-	// TODO
-	return
-	if len(b.Toks) == 0 {
-		return
-	}
-	for i := b.view; i < len(b.Lines); i++ {
-		if i > b.H { break }
-		span := b.Lines[i]
-		line := ""
-		for t := span.Start;
-			t <= span.End;
-			t++ {
-			line += b.Toks[t]
-		}
-		for x, r := range line {
-			y := i - b.view
-			scr.SetContent(b.X+x, b.Y + y, r, nil, b.BodyStyle)
-		}
+		x++
 	}
 }
 
+// _Token & Line Processing --------------------------------------------------------------------------------
 
-func (b *Box) textOnHot(ev *tc.EventMouse) {
-	x, y := mouse.x, mouse.y
-	moved := mousePosChanged()
-	mods  := ev.Modifiers()
+func tokenize(s string) []string {
+	toks := make([]string, 0)
+	// Scan over every character in the string
+	start := 0
+	for i := range len(s) {
+		// If we reach end and it's not a newline
+		// we may need to add to it later
+		// perhaps a flag for "unterminated last token"
+		if i == len(s)-1 {
+			tok := s[start : i+1]
+			toks = append(toks, tok)
+			break
+		}
+		// Look for spaces or '\n'
+		// Every excess space gets its own token right now.
+		// TODO: Deal with it later
+		if s[i] == ' ' ||
+			s[i] == '\n' {
+			tok := s[start : i+1]
+			toks = append(toks, tok)
+			start = i + 1
+		}
+	}
+	return toks
+}
 
+func (b *Box) reflowLines() {
+	if len(b.toks) == 0 {
+		return
+	}
+	b.lines = b.lines[:0]
+	chars := 0
+	start := 0
+
+	for i, tok := range b.toks {
+		l := len(tok)
+		if l == 0 {
+			continue
+		}
+		if chars+l > b.W && i > start {
+			newRange := span{start, i - 1}
+			b.lines = append(b.lines, newRange)
+			start = i
+			chars = 0
+		}
+		chars += l
+		if tok[l-1] == '\n' {
+			newRange := span{start, i}
+			b.lines = append(b.lines, newRange)
+			start = i + 1
+			chars = 0
+		}
+	}
+	// Trailing line
+	if start < len(b.toks) {
+		newRange := span{start, len(b.toks) - 1}
+		b.lines = append(b.lines, newRange)
+	}
+}
+
+// _OnHot --------------------------------------------------------------------------------
+
+func (b *Box) terminalOnHot(ev *tc.EventMouse) {
 	update := func() {
 		redraw = true
 		b.reflowLines()
 	}
-
+	x, y := mouse.x, mouse.y
+	moved := mousePosChanged()
+	mods := ev.Modifiers()
 	switch mouse.mask {
 	case tc.Button1:
 		// Move
-		if b.onTopLeft(x, y, 1) {
+		switch {
+		case b.onTopLeft(x, y, 1):
 			if focusedIdx == -1 {
-				focusedIdx = b.ID
-			} else 
-			if focusedIdx != b.ID {
+				focusedIdx = b.id
+			} else if focusedIdx != b.id {
 				return
 			}
 			if moved {
 				b.X, b.Y = x+1, y+1
 				update()
 			}
-		} else
-		// Resize
-		if b.onBottomRight(x, y, 1) {
+		case b.onBottomRight(x, y, 1):
 			if focusedIdx == -1 {
-				focusedIdx = b.ID
-			} else
-			if focusedIdx != b.ID {
+				focusedIdx = b.id
+			} else if focusedIdx != b.id {
 				return
 			}
 			update()
+			hPrev := b.H
 			b.W, b.H = x-b.X, y-b.Y
-		} else
-		if b.onScrollRegion(x, y) {
+			// Stick to the bottom of the view logic
+			if b.view > 0 &&
+				len(b.lines)-b.view > b.H {
+				b.view -= b.H - hPrev
+			}
+		case b.onScrollRegion(x, y):
 			b.updateSlider(x, y)
-		} else
-		if focusedIdx == b.ID {
+		case b.inMe(x, y):
+			if mods == tc.ModCtrl {
+				b.view = len(b.lines) - b.H
+				if b.view < 0 {
+					b.view = 0
+				}
+			}
+		case focusedIdx == b.id:
 			focusedIdx = -1
 		}
 	// Scroll up and down
@@ -253,9 +449,9 @@ func (b *Box) textOnHot(ev *tc.EventMouse) {
 	case tc.WheelDown:
 		if b.onScrollRegion(x, y) {
 			if mods == tc.ModCtrl {
-				b.view = min(b.view+10, len(b.Lines)-1)
+				b.view = min(b.view+10, len(b.lines)-1)
 			} else {
-				b.view = min(b.view+1, len(b.Lines)-1)
+				b.view = min(b.view+1, len(b.lines)-1)
 			}
 			update()
 		}
@@ -263,31 +459,25 @@ func (b *Box) textOnHot(ev *tc.EventMouse) {
 	}
 }
 
-
 func (b *Box) buttonHot(ev *tc.EventMouse) {
+	redraw = true
 	x := mouse.x
 	y := mouse.y
 
-	defer func() {
-		redraw = true
-	}()
-
 	switch mouse.mask {
 	case tc.Button1:
-		if focusedIdx == b.ID {
+		if focusedIdx == b.id {
 			focusedIdx = -1
 		}
 	case tc.Button2:
 		if b.onTopLeft(x, y, 1) {
 			if focusedIdx == -1 {
-				focusedIdx = b.ID
-			} else 
-			if focusedIdx != b.ID {
+				focusedIdx = b.id
+			} else if focusedIdx != b.id {
 				return
 			}
 			b.X, b.Y = x+1, y+1
-		} else
-		if focusedIdx == b.ID {
+		} else if focusedIdx == b.id {
 			focusedIdx = -1
 		}
 	default:
@@ -300,9 +490,314 @@ func (b *Box) buttonHot(ev *tc.EventMouse) {
 	}
 }
 
+func (b *Box) textOnHot(ev *tc.EventMouse) {
+	x, y := mouse.x, mouse.y
+	moved := mousePosChanged()
+	mods := ev.Modifiers()
 
+	update := func() {
+		b.dirty = true
+		b.reflowLines()
+	}
+	switch mouse.mask {
+	case tc.Button1:
+		// Move
+		if b.onTopLeft(x, y, 1) {
+			if focusedIdx == -1 {
+				focusedIdx = b.id
+			} else if focusedIdx != b.id {
+				return
+			}
+			if moved {
+				b.X, b.Y = x+1, y+1
+				update()
+			}
+		} else
+		// Resize
+		if b.onBottomRight(x, y, 1) {
+			if focusedIdx == -1 {
+				focusedIdx = b.id
+			} else if focusedIdx != b.id {
+				return
+			}
+			update()
+			b.W, b.H = x-b.X, y-b.Y
+		} else if b.onScrollRegion(x, y) {
+			b.updateSlider(x, y)
+		} else if focusedIdx == b.id {
+			focusedIdx = -1
+		}
+	// Scroll up and down
+	case tc.WheelUp:
+		if b.onScrollRegion(x, y) {
+			if mods == tc.ModCtrl {
+				b.view = max(b.view-10, 0)
+			} else {
+				b.view = max(b.view-1, 0)
+			}
+			update()
+		}
+	case tc.WheelDown:
+		if b.onScrollRegion(x, y) {
+			if mods == tc.ModCtrl {
+				b.view = min(b.view+10, len(b.lines)-1)
+			} else {
+				b.view = min(b.view+1, len(b.lines)-1)
+			}
+			update()
+		}
+	default:
+	}
+}
+
+func (b *Box) setPrevs() {
+	b.prev.X, b.prev.Y = b.X, b.Y
+	b.prev.W, b.prev.H = b.W, b.H
+}
+
+func mousePosChanged() bool {
+	xChange := mouse.x != mouse.prev.x
+	yChange := mouse.y != mouse.prev.y
+	return xChange || yChange
+}
+func (b *Box) updateSlider(x, y int) {
+	f := calc.ILerp(b.Y, b.Y+b.H, float64(y))
+	f = calc.Clamp(f, 0, 1)
+	// TODO: Redo
+	//b.ViewIdx = int(calc.Lerp(0, len(b.lines)-1, f))
+}
+func (b *Box) onScrollRegion(x, y int) bool {
+	if x == b.X+b.W &&
+		y >= b.Y && y < b.Y+b.H {
+		return true
+	}
+	return false
+}
+func (b *Box) onTopLeft(x2, y2, dist int) bool {
+	xDist := calc.Abs(b.X - 1 - x2)
+	yDist := calc.Abs(b.Y - 1 - y2)
+	return yDist <= dist && xDist <= dist
+}
+func (b *Box) onBottomRight(x2, y2, dist int) bool {
+	xDist := calc.Abs(b.X + b.W - x2)
+	yDist := calc.Abs(b.Y + b.H - y2)
+	return yDist <= dist && xDist <= dist
+}
+func (b *Box) inMe(x, y int) bool {
+	inX := x >= b.X-1 && x <= b.X+b.W
+	inY := y >= b.Y-1 && y <= b.Y+b.H
+	return inX && inY
+}
+
+// =============================== Box _Types ===============================
+
+/*
+Spawn a new, basic terminal box.
+
+Returns a pointer to the new box for calling it's methods. Example:
+
+	term := fui.Terminal("Ttyvm")
+	term.Println("Hello world!")
+	term.Clear()
+*/
+func Terminal(name string) *Box {
+	toks := make([]string, 0)
+	lines := make([]span, 1)
+	b := &Box{
+		Name:        name,
+		boxType:     terminalT,
+		toks:        toks,
+		lines:       lines,
+		X:           nextTerminalPos.X,
+		Y:           nextTerminalPos.Y,
+		W:           15,
+		H:           15,
+		id:          nextID,
+		BorderStyle: stTerminalBorder,
+		LabelStyle:  stTerminalLabel,
+	}
+	b.Draw = b.textDraw
+	b.Write = b.textWrite
+	b.OnHot = b.terminalOnHot
+	b.OnUpdate = func() {}
+	boxes = append(boxes, b)
+	nextID++
+	nextTerminalPos.X = b.X + b.W + 2
+	b.restoreLayout()
+	return b
+}
+
+// TODO: docs
+func Pad(name string, text string) *Box {
+	toks := make([]string, 0)
+	lines := make([]span, 1)
+	b := &Box{
+		Name:        name,
+		boxType:     padT,
+		toks:        toks,
+		lines:       lines,
+		X:           nextTerminalPos.X,
+		Y:           nextTerminalPos.Y,
+		W:           15,
+		H:           15,
+		id:          nextID,
+		BorderStyle: stTextBorder,
+		LabelStyle:  stTextLabel,
+	}
+	b.Draw = b.textDraw
+	b.Write = b.textWrite
+	b.OnHot = b.textOnHot
+	b.OnUpdate = func() {}
+	b.Write(text)
+	boxes = append(boxes, b)
+	nextID++
+	nextTerminalPos.X = b.X + b.W + 2
+	b.restoreLayout()
+	return b
+}
+
+/*
+Spawn a watcher that prints whenever value of "vPointer" changes. For example:
+
+	v := 0
+	fui.Watcher("value of v", &v)
+	xs := []int{5, 6, 7, 8}
+	fui.Watcher("int slice", &xs)
+*/
+func Watcher(label string, vPointer any) *Box {
+	toks := make([]string, 1)
+	lines := make([]span, 1)
+	b := &Box{
+		Name:        label,
+		boxType:     watcherT,
+		toks:        toks,
+		lines:       lines,
+		X:           nextWatcherPos.X,
+		Y:           nextWatcherPos.Y,
+		H:           3,
+		id:          nextID,
+		BorderStyle: stWatcherBorder,
+		LabelStyle:  stWatcherLabel,
+	}
+	b.Watch.current = vPointer
+	b.Draw = b.textDraw
+	b.Write = b.watcherWrite
+	b.OnHot = b.terminalOnHot
+	b.OnClick = func(*Box) {}
+
+	// TODO: clean up nil / pointer check
+	if vPointer == nil {
+		b.OnUpdate = func() {}
+	} else if reflect.ValueOf(vPointer).Kind() != reflect.Pointer {
+		b.OnUpdate = func() {}
+	} else {
+		b.OnUpdate = func() {
+			// TODO: figure out how we might switch on types and change the formatting verbs accordingly
+			format := typeFormatTable(b.Watch.current)
+			v := fmt.Sprintf(format, reflect.ValueOf(b.Watch.current).Elem().Interface())
+			equals := v == b.Watch.previous
+			if !equals {
+				b.Write(v + "\n")
+				b.Watch.previous = v
+				b.FlashLabel()
+				b.border()
+				b.Draw()
+			}
+		}
+		b.OnUpdate()
+	}
+
+	last := len(b.toks) - 1
+	b.W = len(b.Name) + len(b.toks[last])
+	boxes = append(boxes, b)
+	nextID++
+	nextWatcherPos.Y = b.Y + b.H + 2
+	b.restoreLayout()
+	return b
+}
+
+/*
+Spawn a button that executes a function "onClick". For example:
+
+	x := 0
+	fui.Button("+1", func(b *fui.Box) {
+		x++
+	})
+*/
+func Button(label string, onClick func(self *Box)) *Box {
+	toks := make([]string, 1)
+	lines := make([]span, 1)
+	b := &Box{
+		Name:        label,
+		boxType:     buttonT,
+		toks:        toks,
+		lines:       lines,
+		X:           nextButtonPos.X,
+		Y:           nextButtonPos.Y,
+		W:           rw.StringWidth(label),
+		H:           1,
+		id:          nextID,
+		BorderStyle: stButtonBorder,
+		LabelStyle:  stButtonLabel,
+	}
+
+	b.Draw = b.buttonDraw
+	b.Write = b.buttonWrite
+	b.OnHot = b.buttonHot
+	b.OnClick = onClick
+	b.OnUpdate = func() {}
+
+	boxes = append(boxes, b)
+	nextID++
+	nextButtonPos.X = b.X + b.W + 2
+	b.restoreLayout()
+	return b
+}
+
+/*
+Spawn a text field that executes a function "onCR" (enter / carriage return / newline). For example:
+
+	prompt := fui.Field("$", func(b *fui.Box) {
+		terminal.Println(prompt.Line(-1))
+	})
+*/
+func Field(name string, onCR func(self *Box)) *Box {
+	toks := make([]string, 0)
+	lines := make([]span, 1)
+	b := &Box{
+		Name:        name,
+		boxType:     fieldT,
+		toks:        toks,
+		lines:       lines,
+		X:           nextButtonPos.X,
+		Y:           nextButtonPos.Y,
+		W:           15,
+		H:           1,
+		id:          nextID,
+		BorderStyle: stButtonBorder,
+		LabelStyle:  stFieldLabel,
+	}
+	b.Draw = b.textDraw
+	b.Write = b.fieldWrite
+	b.OnHot = b.terminalOnHot
+	b.OnUpdate = func() {}
+	b.OnCR = onCR
+
+	boxes = append(boxes, b)
+	nextID++
+	nextButtonPos.X = b.X + b.W + 2
+	b.restoreLayout()
+	return b
+}
+
+// ================================ Box _Methods ===============================
+
+/*
+Make the box invert colors for 100ms
+*/
 func (b *Box) Flash() {
 	b.BodyStyle = b.BodyStyle.Reverse(true)
+	redraw = true
 	go func() {
 		t := time.NewTimer(time.Millisecond * 100)
 		<-t.C
@@ -311,282 +806,82 @@ func (b *Box) Flash() {
 	}()
 }
 
+func (b *Box) FlashLabel() {
+	b.LabelStyle = b.LabelStyle.Reverse(true)
+	redraw = true
+	go func() {
+		t := time.NewTimer(time.Millisecond * 50)
+		<-t.C
+		b.LabelStyle = b.LabelStyle.Reverse(false)
+		redraw = true
+	}()
+}
 
-func (b *Box) onScrollRegion(x, y int) bool {
-	if x == b.X + b.W &&
-	   y >= b.Y && y < b.Y + b.H {
-		return true
+func (b *Box) Backspace() {
+	if len(b.toks) == 0 {
+		return
 	}
-	return false
+	// Get the last token, convert to rune slice
+	s := b.toks[len(b.toks)-1]
+	if len(s) == 0 {
+		return
+	}
+	runes := []rune(s)
+	// Remove the last rune (independent of width)
+	// Check length to avoid panic
+	if len(runes) == 0 {
+		return
+	}
+	scr.SetContent(b.X+b.cursor.X, b.Y+b.cursor.Y, ' ', nil, b.BodyStyle)
+	b.cursor.X = max(0, b.cursor.X-1)
+	runes = runes[:len(runes)-1]
+	b.toks[len(b.toks)-1] = string(runes)
 }
 
-func (b *Box) updateSlider(x, y int) {
-	f := calc.ILerp(b.Y, b.Y+b.H, float64(y))
-	f = calc.Clamp(f, 0, 1)
-	// TODO: Redo
-	//b.ViewIdx = int(calc.Lerp(0, len(b.Lines)-1, f))
+func (b *Box) Println(s string) {
+	if s == "" {
+		return
+	}
+	toks := tokenize(s)
+	b.toks = append(b.toks, toks...)
+	b.toks[len(b.toks)-1] += "\n"
+
+	// Just reflow everything everytime for now
+	b.reflowLines()
+	b.textDraw()
 }
 
-func (b *Box) onTopLeft(x2, y2, dist int) bool {
-	xDist := calc.Abs(b.X-1 - x2)
-	yDist := calc.Abs(b.Y-1 - y2)
-	return yDist <= dist && xDist <= dist
-}
-
-func (b *Box) onBottomRight(x2, y2, dist int) bool {
-	xDist := calc.Abs(b.X + b.W - x2)
-	yDist := calc.Abs(b.Y + b.H - y2)
-	return yDist <= dist && xDist <= dist
-}
-
-func (b *Box) inMe(x, y int) bool {
-	inX := x >= b.X-1 && x <= b.X + b.W
-	inY := y >= b.Y-1 && y <= b.Y + b.H
-	return inX && inY
-}
-
-
+/* Clear makes a new line and sets the view to the bottom. */
 func (b *Box) Clear() {
-	X, Y, W, H := b.X, b.Y, b.W, b.H
-	for y := Y;
-		y < Y+H;
-		y++ {
-		for x := X;
-			x < X+W;
-			x++ {
-			scr.SetContent(
-				x, y,
-				' ',
-				nil,
-				stDef)
+	b.Write("\n\n")
+	b.view = len(b.lines)
+	for x := b.X; x < b.X+b.W; x++ {
+		for y := b.Y; y < b.Y+b.H; y++ {
+			scr.SetContent(x, y, ' ', nil, stDimmed)
 		}
 	}
 }
 
-
-var boxThin  = [6]rune{'○', '┐', '└', '○', '│', '─'}
-var boxThick = [6]rune{'●', '┓', '┗', '●', '┃', '━'}
-
-func (b *Box) border() {
-	x, y, w, h := b.X, b.Y, b.W, b.H
-	rs := boxThin[:]
-	style := b.BorderStyle
-
-	if b.ID == focusedIdx {
-		style = b.BorderStyle.Foreground(tc.ColorRed)
-		rs = boxThick[:]
-	}
-
-	// Sides
-	f := calc.ILerp(0, len(b.Lines), float64(b.view))
-	sliderPos := int(calc.Lerp(0, h, f))
-	for i := range h {
-		scr.SetContent(x - 1, y + i, rs[4], nil, style)
-		scr.SetContent(x+w  , y + i, rs[4], nil, style)
-	}
-	if b.bufferType != buttonT {
-		scr.SetContent(x+w  , y + sliderPos, '█', nil, style)
-	}
-	// Top
-	for i := range w {
-		scr.SetContent(x + i, y - 1, rs[5], nil, style)
-	}
-
-	switch b.bufferType {
-	case watcherT:
-		last := len(b.Toks)-1
-		i := 0
-		for _, r := range b.Name {
-			scr.SetContent(x+i, y-1, r, nil, b.BodyStyle); i++
-		}
-		scr.SetContent(x+i, y-1, '[', nil, stDimmed); i++
-		for _, r := range b.Toks[last] {
-			if i >= b.W { break }
-			scr.SetContent(x+i, y-1, r, nil, b.BodyStyle); i++
-		}
-		scr.SetContent(x+i, y-1, ']', nil, stDimmed)
-	case buttonT:
-		// Do nothing
-	default:
-		for i, r := range b.Name {
-			scr.SetContent(x+i, y-1, r, nil, b.BodyStyle)
-		}
-	}
-
-	// Bottom
-	for i := range w {
-		scr.SetContent(x + i, y+h  , rs[5], nil, style)
-	}
-	// Corners
-	scr.SetContent(x - 1, y - 1, rs[0], nil, style)
-	scr.SetContent(x+w  , y - 1, rs[1], nil, style)
-	scr.SetContent(x - 1, y+h  , rs[2], nil, style)
-	scr.SetContent(x+w  , y+h  , rs[3], nil, style)
-}
-
-
-func (b *Box) clearBorder() {
-	x, y, w, h := b.X, b.Y, b.W, b.H
-	// Sides
-	style := tc.StyleDefault
-	for i := range h {
-		scr.SetContent(x - 1, y + i, ' ', nil, style)
-		scr.SetContent(x+w  , y + i, ' ', nil, style)
-	}
-	// Top/Bottom
-	for i := range w {
-		scr.SetContent(x + i, y - 1, ' ', nil, style)
-		scr.SetContent(x + i, y+h  , ' ', nil, style)
-	}
-	// Corners
-	scr.SetContent(x - 1, y - 1, ' ', nil, style)
-	scr.SetContent(x+w  , y - 1, ' ', nil, style)
-	scr.SetContent(x - 1, y+h  , ' ', nil, style)
-	scr.SetContent(x+w  , y+h  , ' ', nil, style)
-}
-
-
-func (b *Box) Line(n int) string {
+/* Returns the i-th line from a box as a string. Pass in -1 to get the newest line. */
+func (b *Box) Line(i int) string {
 	// TODO: access arbitrary lines
-	if n != -1 {
+	if len(b.lines) == 0 ||
+		len(b.toks) == 0 {
+		return ""
+	}
+	if i != -1 {
 		return ""
 	}
 	line := ""
-	span := b.Lines[len(b.Lines)-1]
-	for i := span.Start;
-		i <= span.End;
-		i++ {
-		line += b.Toks[i]
+	span := b.lines[len(b.lines)-1]
+	for i := span.Start; i <= span.End; i++ {
+		line += b.toks[i]
 	}
 	return line
 }
 
-
-// Returns a pointer you can use to call
-// buffer.Write()
-func NewTerminal(name string) *Box {
-	toks  := make([]string, 0)
-	lines := make([]span, 1)
-	b := &Box{
-		Name: name,
-		bufferType: terminalT,
-		Toks: toks,
-		Lines: lines,
-		X: nextTerminalPos.X,
-		Y: nextTerminalPos.Y,
-		W: 15,
-		H: 15,
-		ID: newID,
-		BorderStyle: stTerminalBorder,
-	}
-	b.Draw = b.textDraw
-	b.Write = b.textWrite
-	b.OnHot = b.textOnHot
-	b.OnUpdate = func(){}
-	boxes = append(boxes, b)
-	newID++
-	nextTerminalPos.X = b.X + b.W + 2
-	return b
-}
-
-
-func NewButton(label string, onClick func(self *Box)) *Box {
-	toks  := make([]string, 1)
-	lines := make([]span, 1)
-	b := &Box{
-		Name: label,
-		bufferType: buttonT,
-		Toks: toks,
-		Lines: lines,
-		X: nextButtonPos.X,
-		Y: nextButtonPos.Y,
-		W: len(label),
-		H: 1,
-		ID: newID,
-		BorderStyle: stButtonBorder,
-	}
-	b.Draw		= b.buttonDraw
-	b.Write		= b.buttonWrite
-	b.OnHot		= b.buttonHot
-	b.OnClick	= onClick
-	b.OnUpdate	= func(){}
-
-	boxes = append(boxes, b)
-	newID++
-	nextButtonPos.X = b.X + b.W + 2 
-
-	return b
-}
-
-func NewWatcher(label string, v any) *Box {
-	toks      := make([]string, 1)
-	lines     := make([]span, 1)
-	b := &Box{
-		Name: label,
-		bufferType: watcherT,
-		Toks: toks,
-		Lines: lines,
-		X: nextWatcherPos.X,
-		Y: nextWatcherPos.Y,
-		H: 3,
-		ID: newID,
-		BorderStyle: stWatcherBorder,
-	}
-	b.Watch.current = v
-	b.Draw  = b.textDraw
-	b.Write = b.textWrite
-	b.OnHot = b.textOnHot
-	b.OnUpdate = func(){
-		v := fmt.Sprintf("%+v", reflect.ValueOf(b.Watch.current).Elem().Interface())
-		equals := v == b.Watch.previous
-		if !equals {
-			b.Write(v + "\n")
-			b.Watch.previous = v
-			b.border()
-			b.Draw()
-		}
-	}
-	b.OnUpdate()
-	
-	last := len(b.Toks)-1
-	b.W   = len(b.Name) + len(b.Toks[last])
-	b.OnClick = func(*Box){}
-	boxes = append(boxes, b)
-	newID++
-	nextWatcherPos.Y = b.Y + b.H + 2
-	return b
-}
-
-func tokenize(s string) []string {
-	toks := make([]string, 0)
-
-	// Scan over every character in the string
-	start := 0
-	for i := range s {
-		// If we reach end and it's not a newline
-		// we may need to add to it later
-		// perhaps a flag for "unterminated last token"
-		if i == len(s)-1 {
-			tok := s[start: i+1]
-			toks = append(toks, tok)
-			break
-		}
-		// Look for spaces or '\n'
-		// Every excess space gets its own token right now.
-		// TODO: Deal with it later
-		if s[i] == ' ' ||
-		   s[i] == '\n' {
-			tok := s[start: i+1]
-			toks = append(toks, tok)
-			start = i+1
-		}
-	}
-	return toks
-}
-
-
-func mousePosChanged() bool {
-	xChange := mouse.x != mouse.prev.x
-	yChange := mouse.y != mouse.prev.y
-	return xChange || yChange
+func (b *Box) Reset() {
+	b.view = 0
+	clear(b.lines)
+	clear(b.toks)
 }
