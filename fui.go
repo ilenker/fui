@@ -32,6 +32,9 @@ var (
 			mask tc.ButtonMask
 		}
 	}
+	// This can be used to prevent your main function from returning
+	//	<-fui.ExitSig // Blocks - signal is sent when fui.Exit is set to true.
+	ExitSig chan interface{}
 )
 
 // Global state
