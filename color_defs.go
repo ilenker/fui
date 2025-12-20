@@ -2,31 +2,32 @@ package fui
 
 import (
 	"os"
+
 	tc "github.com/gdamore/tcell/v3"
 )
 
 var colortermOG string
 
-// Color ("style") definitions
-var (
-	stDimmed tc.Style
-	stBody   tc.Style
-	stTerminalBorder tc.Style
-	stWatcherBorder    tc.Style
-	stButtonBorder   tc.Style
-)
+var d int32 = 2
 
-func initStyles() {
-	stDimmed = tc.StyleDefault.Foreground(tc.NewRGBColor(100, 100, 100))
-	d := int32(2)
-	stTerminalBorder = tc.StyleDefault.Foreground(tc.NewRGBColor(  90/d, 225/d, 180/d))
-	stWatcherBorder  = tc.StyleDefault.Foreground(tc.NewRGBColor( 125/d, 100/d,  80/d))
-	stButtonBorder   = tc.StyleDefault.Foreground(tc.NewRGBColor( 180/d, 100/d, 180/d))
-}
+// Color (style) definitions
+var (
+	stDef            = tc.StyleDefault
+	stDimmed         = tc.StyleDefault.Foreground(tc.NewRGBColor(100, 100, 100))
+	stTerminalBorder = tc.StyleDefault.Foreground(tc.NewRGBColor(90/d, 225/d, 180/d))
+	stTextBorder     = tc.StyleDefault.Foreground(tc.NewRGBColor(90/d, 90/d, 180/d))
+	stWatcherBorder  = tc.StyleDefault.Foreground(tc.NewRGBColor(125/d, 100/d, 80/d))
+	stButtonBorder   = tc.StyleDefault.Foreground(tc.NewRGBColor(180/d, 100/d, 180/d))
+	stTerminalLabel  = tc.StyleDefault.Foreground(tc.NewRGBColor(90, 225, 180))
+	stWatcherLabel   = tc.StyleDefault.Foreground(tc.NewRGBColor(125, 100, 80))
+	stTextLabel      = tc.StyleDefault.Foreground(tc.NewRGBColor(90, 90, 180))
+	stButtonLabel    = tc.StyleDefault.Foreground(tc.NewRGBColor(180, 100, 180))
+	stFieldLabel     = tc.StyleDefault.Foreground(tc.NewRGBColor(180, 180, 100))
+)
 
 func setCOLORTERM() {
 	colortermOG = os.Getenv("COLORTERM")
-	os.Setenv("COLORTERM", "truecolor")	
+	os.Setenv("COLORTERM", "truecolor")
 }
 
 func restoreCOLORTERM() {

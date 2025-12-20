@@ -1,8 +1,8 @@
 package fui
 
 import (
-	"os"
 	"encoding/json"
+	"os"
 )
 
 type layoutEntry struct {
@@ -21,11 +21,11 @@ func saveLayout() error {
 	for i := range boxes {
 		entry := layoutEntry{
 			Name: boxes[i].Name,
-			Type: int(boxes[i].bufferType),
-			X: boxes[i].X,
-			Y: boxes[i].Y,
-			W: boxes[i].W,
-			H: boxes[i].H,
+			Type: int(boxes[i].boxType),
+			X:    boxes[i].X,
+			Y:    boxes[i].Y,
+			W:    boxes[i].W,
+			H:    boxes[i].H,
 		}
 		layout[i] = entry
 	}
@@ -33,21 +33,19 @@ func saveLayout() error {
 	if err != nil {
 		return err
 	}
-	os.WriteFile("layout.json", data, 0644)
+	os.WriteFile("layout_autogen.json", data, 0644)
 	return nil
 }
 
 func loadLayout() (bool, error) {
-	data, err := os.ReadFile("layout.json")
+	data, err := os.ReadFile("layout_autogen.json")
 	if err != nil {
 		return false, err
 	}
-
 	err = json.Unmarshal(data, &restoredLayout)
 	if err != nil {
 		return false, err
 	}
-
 	return true, nil
 }
 

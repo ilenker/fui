@@ -2,8 +2,9 @@ package fui
 
 import (
 	"fmt"
-	"time"
 	"reflect"
+	"time"
+
 	"github.com/ilenker/fui/internal/calc"
 
 	tc "github.com/gdamore/tcell/v3"
