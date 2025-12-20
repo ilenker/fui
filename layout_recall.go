@@ -55,8 +55,10 @@ func applyRestoredLayout() {
 			if entry.Name == buf.Name {
 				boxes[i].X = entry.X
 				boxes[i].Y = entry.Y
-				boxes[i].W = entry.W
-				boxes[i].H = entry.H
+				if entry.Type != int(buttonT) {
+					boxes[i].W = entry.W
+					boxes[i].H = entry.H
+				}
 				restoredLayout[j].Name = "^=_$" + entry.Name
 				boxes[i].reflowLines()
 				break
