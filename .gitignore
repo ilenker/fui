@@ -20,3 +20,5 @@
 
 # ...even if they are in subdirectories
 !*/
+
+layout_autogen.json
