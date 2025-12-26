@@ -250,6 +250,7 @@ func explode(v reflect.Value, maxDepth int) {
 		case reflect.UnsafePointer:
 			//panic("Unsafe Pointer not supported")
 		case reflect.Array:
+			return
 			l := v.Len()
 			for i := range l {
 				walk(v.Index(i), "", d+1)
