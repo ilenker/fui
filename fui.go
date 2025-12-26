@@ -169,11 +169,9 @@ func redrawAll() {
 	}
 	scr.Clear()
 	for _, b := range boxes {
-		if focusedIdx != b.id {
-			b.border()
-			b.OnUpdate()
-			b.Draw()
-		}
+		b.border()
+		b.OnUpdate()
+		b.Draw()
 	}
 	Redraw = false
 	if focusedIdx == -1 {
