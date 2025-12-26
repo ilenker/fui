@@ -3,6 +3,7 @@ package fui
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/ilenker/fui/internal/calc"
@@ -17,8 +18,9 @@ const (
 	terminalT boxType = iota
 	buttonT
 	watcherT
-	fieldT
+	promptT
 	padT
+	treeT
 )
 
 type span struct {
@@ -187,6 +189,23 @@ func (b *Box) textDraw() {
 				x++
 			}
 		}
+	}
+}
+
+func (b *Box) treeDraw() {
+	// Don't try rendering if the width is zero
+	if b.W <= 0 {
+		return
+	}
+	//if len(b.toks) == 0 {
+	//	return
+	//}
+	for i := b.view; i < len(b.toks); i++ {
+		//if i-b.view >= b.H {
+		//	break
+		//}
+		line := b.toks[i]
+		scr.PutStr(b.X, b.Y+i-b.view, line)
 	}
 }
 
@@ -457,6 +476,95 @@ func (b *Box) terminalOnHot(ev *tc.EventMouse) {
 			update()
 		}
 	default:
+	}
+}
+
+func (b *Box) treeOnHot(ev *tc.EventMouse) {
+	update := func() {
+		Redraw = true
+	}
+	x, y := mouse.x, mouse.y
+	moved := mousePosChanged()
+	mods := ev.Modifiers()
+	switch mouse.mask {
+	case tc.Button1:
+		// Move
+		switch {
+		case b.onTopLeft(x, y, 1):
+			if focusedIdx == -1 {
+				focusedIdx = b.id
+			} else if focusedIdx != b.id {
+				return
+			}
+			if moved {
+				b.X, b.Y = x+1, y+1
+				update()
+			}
+		case b.onBottomRight(x, y, 1):
+			if focusedIdx == -1 {
+				focusedIdx = b.id
+			} else if focusedIdx != b.id {
+				return
+			}
+			update()
+			hPrev := b.H
+			b.W, b.H = x-b.X, y-b.Y
+			// Stick to the bottom of the view logic
+			if b.view > 0 &&
+				len(b.lines)-b.view > b.H {
+				b.view -= b.H - hPrev
+			}
+		case b.onScrollRegion(x, y):
+			return
+			b.updateSlider(x, y)
+		case b.inMe(x, y):
+			return
+			if mods == tc.ModCtrl {
+				b.view = len(b.lines) - b.H
+				if b.view < 0 {
+					b.view = 0
+				}
+			}
+		case focusedIdx == b.id:
+			focusedIdx = -1
+		}
+	// Scroll up and down
+	case tc.WheelUp:
+		if b.inMe(x, y) {
+			if mods == tc.ModCtrl {
+				b.view = max(b.view-10, 0)
+			} else {
+				b.view = max(b.view-1, 0)
+			}
+			update()
+		}
+	case tc.WheelDown:
+		if b.inMe(x, y) {
+			if mods == tc.ModCtrl {
+				b.view = min(b.view+10, len(b.toks)-1)
+			} else {
+				b.view = min(b.view+1, len(b.toks)-1)
+			}
+			update()
+		}
+	default:
+		if b.inMe(x, y) && 
+		mouse.prev.mask == tc.Button1 {
+			relativeY := y - b.Y + b.view
+			n, ok := b.Watch.current.(*TreeRoot).NodeYs[relativeY]
+			if !ok {
+				return
+			}
+			if mods == tc.ModCtrl {
+				w := Watcher(n.Name, &n.Value)
+				w.X = x + 3
+				w.Y = y + 3
+				return
+			}
+			n.Folded = !n.Folded
+			b.treeWrite()
+			update()
+		}
 	}
 }
 
@@ -762,12 +870,12 @@ Spawn a text field that executes a function "onCR" (enter / carriage return / ne
 		terminal.Println(prompt.Line(-1))
 	})
 */
-func Field(name string, onCR func(self *Box)) *Box {
+func Prompt(name string, onCR func(self *Box)) *Box {
 	toks := make([]string, 0)
 	lines := make([]span, 1)
 	b := &Box{
 		Name:        name,
-		boxType:     fieldT,
+		boxType:     promptT,
 		toks:        toks,
 		lines:       lines,
 		X:           nextButtonPos.X,
@@ -791,7 +899,97 @@ func Field(name string, onCR func(self *Box)) *Box {
 	return b
 }
 
+// TODO: change return back to just *Box
+func Tree(label string, vPointer any) (*TreeRoot, *Box) {
+	toks := make([]string, 1)
+	lines := make([]span, 1)
+	b := &Box{
+		Name:        label,
+		boxType:     treeT,
+		toks:        toks,
+		lines:       lines,
+		X:           nextWatcherPos.X,
+		Y:           nextWatcherPos.Y,
+		H:           15,
+		id:          nextID,
+		BorderStyle: stWatcherBorder,
+		LabelStyle:  stWatcherLabel,
+	}
+	b.Watch.current = vPointer
+	b.Draw = b.treeDraw
+	b.Write = func(string) {}
+	b.OnHot = b.treeOnHot
+	b.OnClick = func(*Box) {}
+	b.OnUpdate = func(){}
+
+	// Save the root node (*StructNode) in Watch.current
+	// Build our tokens from there
+	tree := BuildTreeNodes(vPointer, 100)
+	b.Watch.current = &TreeRoot{
+		Name:   label,
+		NodeYs: make(map[int]*TreeNode),
+		Root:   tree,
+	}
+	// Redraw check cases:
+	// OnClick  - very likely
+	// OnHot    - possibly
+	// OnUpdate - no
+
+	//last := len(b.toks) - 1
+	b.treeWrite()
+	b.W = 15
+	boxes = append(boxes, b)
+	nextID++
+	nextWatcherPos.Y = b.Y + b.H + 2
+	b.restoreLayout()
+	return b.Watch.current.(*TreeRoot), b
+}
+
+// populates all tokens - 1 token per line
+func (b *Box) treeWrite() {
+	if b.boxType != treeT {
+		return
+	}
+	// TODO: non nuclear option?
+	clear(b.Watch.current.(*TreeRoot).NodeYs)
+	b.toks = make([]string, 0)
+	y := b.Y
+	var draw func(*TreeNode, int)
+	draw = func(node *TreeNode, d int) {
+		indent := strings.Repeat(" ", d*2)
+		for _, n := range node.Children {
+			line := indent
+			drawChildren := false
+			if len(n.Children) != 0 && !n.Folded {
+				drawChildren = true
+				line += "-" + n.Name
+			} else {
+				if len(n.Children) == 0 {
+					line += " " + n.Name
+				} else {
+					line += "+" + n.Name
+				}
+			}
+			b.toks = append(b.toks, line)
+			//scr.PutStr(
+			//	b.X+d*2, y,
+			//	line)
+			b.Watch.current.(*TreeRoot).NodeYs[y-b.Y] = n
+			y++
+			if drawChildren {
+				draw(n, d+1)
+			}
+		}
+	}
+	draw(b.Watch.current.(*TreeRoot).Root, 0)
+}
+
 // ================================ Box _Methods ===============================
+
+// temporary cringe accessor
+func (b *Box) GetToks() *[]string {
+	return &b.toks
+}
 
 /*
 Make the box invert colors for 100ms
@@ -822,14 +1020,12 @@ func (b *Box) Backspace() {
 	if len(b.toks) == 0 {
 		return
 	}
-	// Get the last token, convert to rune slice
 	s := b.toks[len(b.toks)-1]
 	if len(s) == 0 {
 		return
 	}
 	runes := []rune(s)
 	// Remove the last rune (independent of width)
-	// Check length to avoid panic
 	if len(runes) == 0 {
 		return
 	}
@@ -840,6 +1036,7 @@ func (b *Box) Backspace() {
 }
 
 func (b *Box) Println(s string) {
+	// TODO: Docs
 	if s == "" {
 		return
 	}

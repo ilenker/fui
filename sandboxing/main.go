@@ -219,12 +219,8 @@ func explode(v reflect.Value, maxDepth int) {
 					walk(v.Index(i), "", d+1)
 				}
 			} else {
-				if label != "Name" {
-					return
-				}
 				w := fui.Watcher(label, &v)
-				w.X = 1 + d*6
-				w.Y = 1 + d
+				w.Y += d * 4
 			}
 		case reflect.Struct:
 			fs := reflect.VisibleFields(v.Type())
@@ -235,12 +231,7 @@ func explode(v reflect.Value, maxDepth int) {
 			v := v.Elem()
 			walk(v, label, d)
 		default:
-			if label != "Name" {
-				return
-			}
-			w := fui.Watcher(label, &v)
-			w.X = 1 + d*6
-			w.Y = 1 + d
+			fui.Watcher(label, &v)
 		}
 	}
 	walk(v, "", 0)

@@ -24,7 +24,7 @@ func main() {
 		s := subProc("ls -lh")
 		term.Println(s)
 	})
-	prompt = fui.Field("$", func(*fui.Box) {
+	prompt = fui.Prompt("$", func(*fui.Box) {
 		l := prompt.Line(-1)
 		term.Println(l)
 		term.Println(subProc(l))

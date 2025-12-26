@@ -140,7 +140,7 @@ func readInput() {
 				continue
 
 			// Pass keystrokes onto any focused text input field
-			case boxes[focusedIdx].boxType == fieldT:
+			case boxes[focusedIdx].boxType == promptT:
 				switch key.Key() {
 				case tc.KeyEnter:
 					boxes[focusedIdx].OnCR(boxes[focusedIdx])
