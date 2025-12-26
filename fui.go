@@ -39,7 +39,7 @@ var (
 
 // Global state
 var (
-	redraw       bool
+	Redraw       bool
 	Exit         bool
 	active       bool // Unused
 	layoutLoadOK bool
@@ -98,7 +98,7 @@ func Start() {
 			time.Sleep(time.Millisecond * 50)
 		}
 		<-frameTick.C
-		if redraw {
+		if Redraw {
 			redrawAll()
 		}
 		onUpdateAll()
@@ -134,7 +134,7 @@ func readInput() {
 
 			case key.Key() == tc.KeyTAB:
 				focusedIdx = calc.WrapInt(focusedIdx+1, len(boxes))
-				redraw = true
+				Redraw = true
 
 			case focusedIdx == -1:
 				continue
@@ -164,7 +164,7 @@ func onUpdateAll() {
 
 func redrawAll() {
 	if len(boxes) == 0 {
-		redraw = false
+		Redraw = false
 		return
 	}
 	scr.Clear()
@@ -175,7 +175,7 @@ func redrawAll() {
 			b.Draw()
 		}
 	}
-	redraw = false
+	Redraw = false
 	if focusedIdx == -1 {
 		return
 	}

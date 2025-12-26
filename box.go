@@ -22,8 +22,8 @@ const (
 )
 
 type span struct {
-	Start int
-	End   int
+	start int
+	end   int
 }
 
 type Box struct {
@@ -169,7 +169,7 @@ func (b *Box) textDraw() {
 		}
 		span := b.lines[i]
 		line := ""
-		for t := span.Start; t <= span.End; t++ {
+		for t := span.start; t <= span.end; t++ {
 			line += b.toks[t]
 		}
 		x := 0
@@ -391,7 +391,7 @@ func (b *Box) reflowLines() {
 
 func (b *Box) terminalOnHot(ev *tc.EventMouse) {
 	update := func() {
-		redraw = true
+		Redraw = true
 		b.reflowLines()
 	}
 	x, y := mouse.x, mouse.y
@@ -461,7 +461,7 @@ func (b *Box) terminalOnHot(ev *tc.EventMouse) {
 }
 
 func (b *Box) buttonHot(ev *tc.EventMouse) {
-	redraw = true
+	Redraw = true
 	x := mouse.x
 	y := mouse.y
 
@@ -798,23 +798,23 @@ Make the box invert colors for 100ms
 */
 func (b *Box) Flash() {
 	b.BodyStyle = b.BodyStyle.Reverse(true)
-	redraw = true
+	Redraw = true
 	go func() {
 		t := time.NewTimer(time.Millisecond * 100)
 		<-t.C
 		b.BodyStyle = b.BodyStyle.Reverse(false)
-		redraw = true
+		Redraw = true
 	}()
 }
 
 func (b *Box) FlashLabel() {
 	b.LabelStyle = b.LabelStyle.Reverse(true)
-	redraw = true
+	Redraw = true
 	go func() {
 		t := time.NewTimer(time.Millisecond * 50)
 		<-t.C
 		b.LabelStyle = b.LabelStyle.Reverse(false)
-		redraw = true
+		Redraw = true
 	}()
 }
 
@@ -875,7 +875,7 @@ func (b *Box) Line(i int) string {
 	}
 	line := ""
 	span := b.lines[len(b.lines)-1]
-	for i := span.Start; i <= span.End; i++ {
+	for i := span.start; i <= span.end; i++ {
 		line += b.toks[i]
 	}
 	return line
