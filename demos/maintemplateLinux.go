@@ -1,11 +1,11 @@
 package main
 
 import (
-	"syscall"
 	"fmt"
-	"runtime/debug"
-	"os"
 	"github.com/ilenker/fui"
+	"os"
+	"runtime/debug"
+	"syscall"
 )
 
 // Template user side api testing
@@ -25,12 +25,12 @@ func main() {
 				stack := debug.Stack()
 				errLog := fmt.Sprintf("panic: %v\n\n%s", r, stack)
 				_ = os.WriteFile("crash.log", []byte(errLog), 0644)
-				os.Exit(1) 
+				os.Exit(1)
 			}
 		}()
 		fui.Start()
 	}()
 	/* --------------------------------- */
 
-	select{}
+	select {}
 }
