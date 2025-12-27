@@ -3,6 +3,7 @@ package fui
 import (
 	"fmt"
 	"time"
+	"slices"
 
 	tc "github.com/gdamore/tcell/v3"
 	"github.com/ilenker/fui/internal/calc"
@@ -10,6 +11,7 @@ import (
 
 var (
 	boxes           []*Box
+	deletedBoxes 	[]int
 	nextID          int
 	focusedIdx      int
 	scr             tc.Screen
@@ -68,6 +70,7 @@ func Init() {
 		fmt.Printf("%v\n", err)
 	}
 	boxes = make([]*Box, 0, 8)
+	deletedBoxes = make([]int, 0, 8)
 	frameTick = time.NewTicker(Hz)
 	ExitSig = make(chan interface{})
 }
@@ -120,7 +123,9 @@ func readInput() {
 			mouse.x, mouse.y = mev.Position()
 			mouse.mask = mev.Buttons()
 			for _, b := range boxes {
-				b.OnHot(mev)
+				if b != nil {
+					b.OnHot(mev)
+				}
 			}
 			mouse.prev.x, mouse.prev.y = mev.Position()
 			mouse.prev.mask = mev.Buttons()
@@ -132,8 +137,25 @@ func readInput() {
 				active = false
 				return
 
+			case key.Key() == tc.KeyDelete:
+				if focusedIdx == -1 {
+					continue
+				}
+				if boxes[focusedIdx].volatile == false {
+					continue
+				}
+				boxes[focusedIdx] = nil
+				deletedBoxes = append(deletedBoxes, focusedIdx)
+				focusedIdx = -1
+				Redraw = true
+
 			case key.Key() == tc.KeyTAB:
-				focusedIdx = calc.WrapInt(focusedIdx+1, len(boxes))
+				for {
+					focusedIdx = calc.WrapInt(focusedIdx+1, len(boxes))
+					if !slices.Contains(deletedBoxes, focusedIdx) {
+						break
+					}
+				}
 				Redraw = true
 
 			case focusedIdx == -1:
@@ -158,7 +180,9 @@ func readInput() {
 
 func onUpdateAll() {
 	for _, b := range boxes {
-		b.OnUpdate()
+		if b != nil {
+			b.OnUpdate()
+		}
 	}
 }
 
@@ -169,9 +193,11 @@ func redrawAll() {
 	}
 	scr.Clear()
 	for _, b := range boxes {
-		b.border()
-		b.OnUpdate()
-		b.Draw()
+		if b != nil {
+			b.border()
+			b.OnUpdate()
+			b.Draw()
+		}
 	}
 	Redraw = false
 	if focusedIdx == -1 {

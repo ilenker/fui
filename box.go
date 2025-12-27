@@ -44,7 +44,6 @@ type Box struct {
 		X, Y int
 		W, H int
 	}
-	dirty       bool
 	BorderStyle tc.Style
 	LabelStyle  tc.Style
 	BodyStyle   tc.Style
@@ -58,6 +57,7 @@ type Box struct {
 		current  any
 		previous string
 	}
+	volatile    bool
 }
 
 func (b *Box) restoreLayout() {
@@ -125,11 +125,9 @@ skipCheck:
 	b.reflowLines()
 	if s == "\n" {
 		b.view++
-		b.dirty = true
 	} else {
 		if b.view != len(b.lines)-1 {
 			b.view = len(b.lines) - 1
-			b.dirty = true
 		}
 	}
 	b.textDraw()
@@ -559,6 +557,7 @@ func (b *Box) treeOnHot(ev *tc.EventMouse) {
 				w := Watcher(n.Name, &n.Value)
 				w.X = x + 3
 				w.Y = y + 3
+				w.volatile = true
 				return
 			}
 			n.Folded = !n.Folded
@@ -605,7 +604,6 @@ func (b *Box) textOnHot(ev *tc.EventMouse) {
 	mods := ev.Modifiers()
 
 	update := func() {
-		b.dirty = true
 		b.reflowLines()
 	}
 	switch mouse.mask {
@@ -818,8 +816,17 @@ func Watcher(label string, vPointer any) *Box {
 
 	last := len(b.toks) - 1
 	b.W = len(b.Name) + len(b.toks[last])
-	boxes = append(boxes, b)
-	nextID++
+	if len(deletedBoxes) > 0 {
+		last := len(deletedBoxes)-1
+		id := deletedBoxes[last]
+		boxes[id] = b
+		b.id = id
+		deletedBoxes = deletedBoxes[:last]
+	} else {
+		b.id = nextID
+		boxes = append(boxes, b)
+		nextID++
+	}
 	nextWatcherPos.Y = b.Y + b.H + 2
 	b.restoreLayout()
 	return b
