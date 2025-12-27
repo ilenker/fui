@@ -199,9 +199,9 @@ func (b *Box) treeDraw() {
 	//	return
 	//}
 	for i := b.view; i < len(b.toks); i++ {
-		//if i-b.view >= b.H {
-		//	break
-		//}
+		if i-b.view >= b.H {
+			break
+		}
 		line := b.toks[i]
 		scr.PutStr(b.X, b.Y+i-b.view, line)
 	}
@@ -708,8 +708,8 @@ Returns a pointer to the new box for calling it's methods. Example:
 	term.Clear()
 */
 func Terminal(name string) *Box {
-	toks := make([]string, 0)
-	lines := make([]span, 1)
+	toks := make([]string, 0, 64)
+	lines := make([]span, 0, 64)
 	b := &Box{
 		Name:        name,
 		boxType:     terminalT,
@@ -727,6 +727,7 @@ func Terminal(name string) *Box {
 	b.Write = b.textWrite
 	b.OnHot = b.terminalOnHot
 	b.OnUpdate = func() {}
+
 	boxes = append(boxes, b)
 	nextID++
 	nextTerminalPos.X = b.X + b.W + 2
@@ -736,8 +737,8 @@ func Terminal(name string) *Box {
 
 // TODO: docs
 func Pad(name string, text string) *Box {
-	toks := make([]string, 0)
-	lines := make([]span, 1)
+	toks := make([]string, 0, 64)
+	lines := make([]span, 0, 64)
 	b := &Box{
 		Name:        name,
 		boxType:     padT,
@@ -756,6 +757,7 @@ func Pad(name string, text string) *Box {
 	b.OnHot = b.textOnHot
 	b.OnUpdate = func() {}
 	b.Write(text)
+
 	boxes = append(boxes, b)
 	nextID++
 	nextTerminalPos.X = b.X + b.W + 2
@@ -772,8 +774,8 @@ Spawn a watcher that prints whenever value of "vPointer" changes. For example:
 	fui.Watcher("int slice", &xs)
 */
 func Watcher(label string, vPointer any) *Box {
-	toks := make([]string, 1)
-	lines := make([]span, 1)
+	toks := make([]string, 0, 64)
+	lines := make([]span, 0, 64)
 	b := &Box{
 		Name:        label,
 		boxType:     watcherT,
@@ -782,7 +784,6 @@ func Watcher(label string, vPointer any) *Box {
 		X:           nextWatcherPos.X,
 		Y:           nextWatcherPos.Y,
 		H:           3,
-		id:          nextID,
 		BorderStyle: stWatcherBorder,
 		LabelStyle:  stWatcherLabel,
 	}
@@ -878,8 +879,8 @@ Spawn a text field that executes a function "onCR" (enter / carriage return / ne
 	})
 */
 func Prompt(name string, onCR func(self *Box)) *Box {
-	toks := make([]string, 0)
-	lines := make([]span, 1)
+	toks := make([]string, 64)
+	lines := make([]span, 64)
 	b := &Box{
 		Name:        name,
 		boxType:     promptT,
@@ -908,8 +909,8 @@ func Prompt(name string, onCR func(self *Box)) *Box {
 
 // TODO: change return back to just *Box
 func Tree(label string, vPointer any) (*TreeRoot, *Box) {
-	toks := make([]string, 1)
-	lines := make([]span, 1)
+	toks := make([]string, 64)
+	lines := make([]span, 64)
 	b := &Box{
 		Name:        label,
 		boxType:     treeT,
@@ -918,6 +919,7 @@ func Tree(label string, vPointer any) (*TreeRoot, *Box) {
 		X:           nextWatcherPos.X,
 		Y:           nextWatcherPos.Y,
 		H:           15,
+		W:			 15,
 		id:          nextID,
 		BorderStyle: stWatcherBorder,
 		LabelStyle:  stWatcherLabel,
@@ -942,9 +944,8 @@ func Tree(label string, vPointer any) (*TreeRoot, *Box) {
 	// OnHot    - possibly
 	// OnUpdate - no
 
-	//last := len(b.toks) - 1
 	b.treeWrite()
-	b.W = 15
+
 	boxes = append(boxes, b)
 	nextID++
 	nextWatcherPos.Y = b.Y + b.H + 2

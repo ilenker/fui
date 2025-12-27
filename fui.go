@@ -72,7 +72,7 @@ func Init() {
 	boxes = make([]*Box, 0, 8)
 	deletedBoxes = make([]int, 0, 8)
 	frameTick = time.NewTicker(Hz)
-	ExitSig = make(chan interface{})
+	ExitSig = make(chan any)
 }
 
 func Start() {
