@@ -22,3 +22,5 @@
 !*/
 
 layout_autogen.json
+sandboxing/layout_autogen.json
+sandboxing/main.go
