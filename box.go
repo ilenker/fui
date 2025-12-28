@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ilenker/fui/internal/calc"
+	. "github.com/ilenker/fui/internal/calc"
 
 	tc "github.com/gdamore/tcell/v3"
 	rw "github.com/mattn/go-runewidth"
@@ -31,6 +31,7 @@ type span struct {
 type Box struct {
 	toks    []string
 	lines   []span
+	history []int
 	boxType boxType
 	Name    string
 	view    int
@@ -134,17 +135,16 @@ skipCheck:
 }
 
 func (b *Box) watcherWrite(s string) {
-	toks := tokenize(s)
-	b.toks = append(b.toks, toks...)
+	//toks := tokenize(s)
+	b.toks = append(b.toks, s)
 
 	// Just reflow everything everytime for now
-	b.reflowLines()
 	// Stick view to bottom only
 	// if already at the bottom
-	if b.view == len(b.lines)-b.H-1 {
-		b.view = len(b.lines) - b.H
+	if b.view == len(b.toks)-b.H-1 {
+		b.view = len(b.toks)-b.H
 	}
-	b.textDraw()
+	b.watcherDraw()
 }
 
 func (b *Box) buttonWrite(s string) {
@@ -168,12 +168,12 @@ func (b *Box) textDraw() {
 			break
 		}
 		span := b.lines[i]
-		line := ""
+		builder := strings.Builder{}
 		for t := span.start; t <= span.end; t++ {
-			line += b.toks[t]
+			builder.WriteString(b.toks[t])
 		}
 		x := 0
-		for _, r := range line {
+		for _, r := range builder.String() {
 			y := i - b.view
 			if x >= b.W {
 				break
@@ -207,6 +207,42 @@ func (b *Box) treeDraw() {
 	}
 }
 
+func (b *Box) watcherDraw() {
+	// Don't try rendering if the width is zero
+	if b.W <= 0 {
+		return
+	}
+	//if len(b.toks) == 0 {
+	//	return
+	//}
+	if Timestep {
+		if len(b.history) == 0 {
+			return
+		}
+		if len(timesteps) == 0 {
+			return
+		}
+		for i := 0; i < len(b.history); i++ {
+			if b.history[i] > timesteps[timestepView] {
+				return
+			}
+			line := b.toks[i]
+			scr.PutStr(b.X, b.Y+i, line)
+		}
+		return
+	}
+	for i := 0; i < len(b.toks); i++ {
+		if i >= b.H {
+			break
+		}
+		if i+b.view >= len(b.toks) {
+			break
+		}
+		line := b.toks[i+b.view]
+		scr.PutStr(b.X, b.Y+i, line)
+	}
+}
+
 func (b *Box) blank() {
 	limitX := b.X + b.W + 2
 	limitY := b.Y + b.H + 2
@@ -235,8 +271,14 @@ func (b *Box) border() {
 		rs = boxDefault[:]
 	}
 	// Sides
-	f := calc.ILerp(0, len(b.lines), float64(b.view))
-	sliderPos := int(calc.Lerp(0, h, f))
+	var lenLines int
+	if b.boxType == watcherT {
+		lenLines = len(b.toks)
+	} else {
+		lenLines = len(b.lines)
+	}
+	f := ILerp(0, lenLines, float64(b.view))
+	sliderPos := int(Lerp(0, h, f))
 	for i := range h {
 		scr.SetContent(x-1, y+i, rs[4], nil, style)
 		scr.SetContent(x+w, y+i, rs[4], nil, style)
@@ -414,6 +456,12 @@ func (b *Box) terminalOnHot(ev *tc.EventMouse) {
 	x, y := mouse.x, mouse.y
 	moved := mousePosChanged()
 	mods := ev.Modifiers()
+	var lenLines int
+	if b.boxType == watcherT {
+		lenLines = len(b.toks)
+	} else {
+		lenLines = len(b.lines)
+	}
 	switch mouse.mask {
 	case tc.Button1:
 		// Move
@@ -439,14 +487,14 @@ func (b *Box) terminalOnHot(ev *tc.EventMouse) {
 			b.W, b.H = x-b.X, y-b.Y
 			// Stick to the bottom of the view logic
 			if b.view > 0 &&
-				len(b.lines)-b.view > b.H {
-				b.view -= b.H - hPrev
+				lenLines-b.view > b.H {
+				b.view -= b.H-hPrev
 			}
 		case b.onScrollRegion(x, y):
 			b.updateSlider(x, y)
 		case b.inMe(x, y):
 			if mods == tc.ModCtrl {
-				b.view = len(b.lines) - b.H
+				b.view = lenLines - b.H
 				if b.view < 0 {
 					b.view = 0
 				}
@@ -467,9 +515,9 @@ func (b *Box) terminalOnHot(ev *tc.EventMouse) {
 	case tc.WheelDown:
 		if b.onScrollRegion(x, y) {
 			if mods == tc.ModCtrl {
-				b.view = min(b.view+10, len(b.lines)-1)
+				b.view = min(b.view+10, lenLines-1)
 			} else {
-				b.view = min(b.view+1, len(b.lines)-1)
+				b.view = min(b.view+1, lenLines-1)
 			}
 			update()
 		}
@@ -668,10 +716,10 @@ func mousePosChanged() bool {
 	return xChange || yChange
 }
 func (b *Box) updateSlider(x, y int) {
-	f := calc.ILerp(b.Y, b.Y+b.H, float64(y))
-	f = calc.Clamp(f, 0, 1)
+	f := ILerp(b.Y, b.Y+b.H, float64(y))
+	f = Clamp(f, 0, 1)
 	// TODO: Redo
-	//b.ViewIdx = int(calc.Lerp(0, len(b.lines)-1, f))
+	//b.ViewIdx = int(Lerp(0, len(b.lines)-1, f))
 }
 func (b *Box) onScrollRegion(x, y int) bool {
 	if x == b.X+b.W &&
@@ -681,13 +729,13 @@ func (b *Box) onScrollRegion(x, y int) bool {
 	return false
 }
 func (b *Box) onTopLeft(x2, y2, dist int) bool {
-	xDist := calc.Abs(b.X - 1 - x2)
-	yDist := calc.Abs(b.Y - 1 - y2)
+	xDist := Abs(b.X - 1 - x2)
+	yDist := Abs(b.Y - 1 - y2)
 	return yDist <= dist && xDist <= dist
 }
 func (b *Box) onBottomRight(x2, y2, dist int) bool {
-	xDist := calc.Abs(b.X + b.W - x2)
-	yDist := calc.Abs(b.Y + b.H - y2)
+	xDist := Abs(b.X + b.W - x2)
+	yDist := Abs(b.Y + b.H - y2)
 	return yDist <= dist && xDist <= dist
 }
 func (b *Box) inMe(x, y int) bool {
@@ -776,11 +824,13 @@ Spawn a watcher that prints whenever value of "vPointer" changes. For example:
 func Watcher(label string, vPointer any) *Box {
 	toks := make([]string, 0, 64)
 	lines := make([]span, 0, 64)
+	history := make([]int, 0, 1024)
 	b := &Box{
 		Name:        label,
 		boxType:     watcherT,
 		toks:        toks,
 		lines:       lines,
+		history:	 history,
 		X:           nextWatcherPos.X,
 		Y:           nextWatcherPos.Y,
 		H:           3,
@@ -788,7 +838,7 @@ func Watcher(label string, vPointer any) *Box {
 		LabelStyle:  stWatcherLabel,
 	}
 	b.Watch.current = vPointer
-	b.Draw = b.textDraw
+	b.Draw = b.watcherDraw
 	b.Write = b.watcherWrite
 	b.OnHot = b.terminalOnHot
 	b.OnClick = func(*Box) {}
@@ -809,7 +859,16 @@ func Watcher(label string, vPointer any) *Box {
 				b.Watch.previous = v
 				b.FlashLabel()
 				b.border()
-				b.Draw()
+				b.watcherDraw()
+				b.history = append(b.history, frameID)
+				prevID, ok := Last(timesteps)
+				if ok {
+					if prevID != frameID {
+						timesteps = append(timesteps, frameID)
+					}
+				} else {
+					timesteps = append(timesteps, frameID)
+				}
 			}
 		}
 		b.OnUpdate()
