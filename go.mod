@@ -3,7 +3,7 @@ module github.com/ilenker/fui
 go 1.25
 
 require (
-	github.com/gdamore/tcell/v3 v3.0.3
+	github.com/gdamore/tcell/v3 v3.0.5
 	github.com/mattn/go-runewidth v0.0.19
 )
 
