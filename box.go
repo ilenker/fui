@@ -127,7 +127,7 @@ skipCheck:
 	if s == "\n" {
 		b.view++
 	} else {
-		if b.view != len(b.lines)-1 {
+		if b.view != len(b.lines) - 1 {
 			b.view = len(b.lines) - 1
 		}
 	}
@@ -260,15 +260,15 @@ var boxFocused = [7]rune{'┏', '┓', '┗', '┛', '┃', '━', '●'}
 func (b *Box) border() {
 	x, y, w, h := b.X, b.Y, b.W, b.H
 	var style tc.Style
-	var rs []rune
+	var rs *[7]rune
 
 	switch b.id {
 	case focusedIdx:
 		style = b.BorderStyle.Foreground(tc.ColorRed)
-		rs = boxFocused[:]
+		rs = &boxFocused
 	default:
 		style = b.BorderStyle
-		rs = boxDefault[:]
+		rs = &boxDefault
 	}
 	// Sides
 	var lenLines int
@@ -853,9 +853,9 @@ func Watcher(label string, vPointer any) *Box {
 			// TODO: figure out how we might switch on types and change the formatting verbs accordingly
 			format := typeFormatTable(b.Watch.current)
 			v := fmt.Sprintf(format, reflect.ValueOf(b.Watch.current).Elem().Interface())
-			equals := v == b.Watch.previous
-			if !equals {
-				b.Write(v + "\n")
+			changed := v != b.Watch.previous
+			if changed {
+				b.watcherWrite(v + "\n")
 				b.Watch.previous = v
 				b.FlashLabel()
 				b.border()
