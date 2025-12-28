@@ -19,6 +19,10 @@ var (
 	scrH            int
 	stdin           chan tc.Event
 	frameTick       *time.Ticker
+	frameID			int
+	timestepView	int
+	timesteps		[]int
+	TimestepTick    chan any
 	Hz              = time.Second / 60
 	restoredLayout  layout
 	nextButtonPos   calc.Vec2
@@ -45,6 +49,7 @@ var (
 	Exit         bool
 	active       bool // Unused
 	layoutLoadOK bool
+	Timestep	 bool
 )
 
 func Init() {
@@ -72,6 +77,8 @@ func Init() {
 	boxes = make([]*Box, 0, 8)
 	deletedBoxes = make([]int, 0, 8)
 	frameTick = time.NewTicker(Hz)
+	timesteps = make([]int, 0, 1024)
+	TimestepTick = make(chan any)
 	ExitSig = make(chan any)
 }
 
@@ -83,6 +90,7 @@ func Start() {
 		}
 		scr.Fini()
 		restoreCOLORTERM()
+		Timestep = false
 		select {
 		case ExitSig <- nil:
 		default:
@@ -94,18 +102,25 @@ func Start() {
 	}
 	redrawAll()
 
+	spawnTimestepControls()
+
 	go readInput()
 
 	for !Exit {
 		if !active {
 			time.Sleep(time.Millisecond * 50)
 		}
-		<-frameTick.C
+		if !Timestep {
+			<-frameTick.C
+			onUpdateAll()
+		} else {
+			<-TimestepTick
+		}
 		if Redraw {
 			redrawAll()
 		}
-		onUpdateAll()
 		scr.Show()
+		frameID++
 	}
 }
 
@@ -114,6 +129,9 @@ func readInput() {
 		ev := <-stdin
 		if ev == nil {
 			continue
+		}
+		if Timestep {
+			TimestepTick <-nil
 		}
 		// Forgot why we needed this
 		//if time.Since(ev.When()) > time.Millisecond*10 {
@@ -195,7 +213,6 @@ func redrawAll() {
 	for _, b := range boxes {
 		if b != nil {
 			b.border()
-			b.OnUpdate()
 			b.Draw()
 		}
 	}
@@ -205,6 +222,39 @@ func redrawAll() {
 	}
 	// Draw focused box last
 	boxes[focusedIdx].border()
-	boxes[focusedIdx].OnUpdate()
 	boxes[focusedIdx].Draw()
+}
+
+func spawnTimestepControls() {
+	tty := Terminal("timesteps")
+	Button("Toggle TS", func(b *Box) {
+		tty.Println(fmt.Sprintf("%v", timesteps))
+		if Timestep {
+			Timestep = false
+			timestepView = 0
+			return
+		}
+		Timestep = true
+		timestepView = len(timesteps)-1
+	})
+	Button("<-", func(b *Box) {
+		timestepView--
+		if timestepView < 0 {
+			timestepView = 0
+		}
+		select {
+		case TimestepTick <-nil:
+		default:
+		}
+	})
+	Button("->", func(b *Box) {
+		timestepView++
+		if timestepView >= len(timesteps) {
+			timestepView = len(timesteps)-1
+		}
+		select {
+		case TimestepTick <-nil:
+		default:
+		}
+	})
 }
