@@ -234,3 +234,11 @@ func Abs(n int) int {
 	value += temp & 1   // add one if value was negative
 	return int(value)
 }
+
+func Last[T any](s []T) (T, bool) {
+	var value T
+	if len(s) == 0 {
+		return value, false
+	}
+	return s[len(s)-1], true
+}
