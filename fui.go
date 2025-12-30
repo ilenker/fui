@@ -9,6 +9,11 @@ import (
 	"github.com/ilenker/fui/internal/calc"
 )
 
+// Realized I bit off way more than I could chew!
+// Leaving everything in this chaotic state and
+// reverting back to a much earlier commit.
+// Reducing scope substantially.
+
 var (
 	boxes           []*Box
 	deletedBoxes 	[]int
