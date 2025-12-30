@@ -1102,6 +1102,7 @@ func (b *Box) Backspace() {
 	b.toks[len(b.toks)-1] = string(runes)
 }
 
+// Just a wrapper for fmt.Println functionality
 func (b *Box) Println(s string) {
 	// TODO: Docs
 	if s == "" {
@@ -1114,6 +1115,12 @@ func (b *Box) Println(s string) {
 	// Just reflow everything everytime for now
 	b.reflowLines()
 	b.textDraw()
+}
+
+// Just a wrapper for fmt.Printf using fmt.Sprintf
+func (b *Box) Printf(format string, a ...any) {
+    s := fmt.Sprintf(format, a...)
+    b.Write(s)
 }
 
 /* Clear makes a new line and sets the view to the bottom. */
