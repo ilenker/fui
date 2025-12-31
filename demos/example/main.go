@@ -1,39 +1,37 @@
 package main
 
 import (
-	"github.com/ilenker/fui"
+	"fmt"
 	"time"
+	"github.com/ilenker/fui"
 )
 
 func main() {
-	fui.Init()
-
-	// 1. Create a Terminal to log output
-	term := fui.Terminal("Logs")
-	term.Println("Hello world!")
-
-	// 2. Create a variable watcher
-	counter := 0
-	fui.Watcher("Counter", &counter)
-
-	// 3. Create a button
-	fui.Button("Reset", func(*fui.Box) {
-		counter = 0
-		term.Println("Counter reset")
-	})
+	ui := fui.Init()
+	tty := ui.AddTerminal("Terminal")
+	tty2 := ui.AddTerminal("Terminal2")
+	ui.Layout.Rects[tty2].X += 20
+	ui.Layout.Rects[tty2].W += 20
+	ui.Terms.WriteToBuffer(tty, "Hello!")
 
 	// Start the UI in a goroutine
 	go fui.Start()
 
 	// Simulating a main application loop
-	t := time.NewTicker(100 * time.Millisecond)
+	t := time.NewTicker(16 * time.Millisecond)
 	for {
 		// Check for UI exit signal
 		select {
 		case <-fui.ExitSig:
 			return
 		case <-t.C:
-			counter++
+			s := fmt.Sprintf("hz:%s|az:%s|h:%d|a:%d",
+				fui.Mouse.HotZone.String(),
+				fui.Mouse.ActZone.String(),
+				fui.Mouse.HotID,
+				fui.Mouse.ActID)
+			ui.Terms.Buffers[tty2] = []byte(s)
 		}
 	}
 }
+
