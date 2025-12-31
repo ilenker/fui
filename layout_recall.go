@@ -16,6 +16,7 @@ type layoutEntry struct {
 
 type layout []layoutEntry
 
+/*
 func saveLayout() error {
 	layout := make(layout, len(boxes))
 	for i := range boxes {
@@ -39,6 +40,7 @@ func saveLayout() error {
 	os.WriteFile("layout_autogen.json", data, 0644)
 	return nil
 }
+*/
 
 func loadLayout() (bool, error) {
 	// TODO: Recall boxes created dynamically via Struct Tree box
@@ -53,6 +55,7 @@ func loadLayout() (bool, error) {
 	return true, nil
 }
 
+/*
 func applyRestoredLayout() {
 	for i, buf := range boxes {
 		for j, entry := range restoredLayout {
@@ -70,3 +73,4 @@ func applyRestoredLayout() {
 		}
 	}
 }
+*/

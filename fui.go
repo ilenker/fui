@@ -3,40 +3,33 @@ package fui
 import (
 	"fmt"
 	"time"
-	"slices"
 
 	tc "github.com/gdamore/tcell/v3"
 	"github.com/ilenker/fui/internal/calc"
 )
 
 var (
-	boxes           []*Box
-	deletedBoxes 	[]int
-	nextID          int
 	focusedIdx      int
 	scr             tc.Screen
 	scrW            int
 	scrH            int
 	stdin           chan tc.Event
-	frameTick       *time.Ticker
-	frameID			int
-	timestepView	int
-	timesteps		[]int
-	TimestepTick    chan any
 	Hz              = time.Second / 60
+	frameTick		*time.Ticker
 	restoredLayout  layout
 	nextButtonPos   calc.Vec2
 	nextTerminalPos calc.Vec2
-	nextWatcherPos  calc.Vec2
 	nextFieldPos    calc.Vec2 // Unused
 	nextPadPos      calc.Vec2 // Unused
-	mouse           struct {
-		x, y int
-		mask tc.ButtonMask
-		prev struct {
-			x, y int
-			mask tc.ButtonMask
-		}
+	Mouse           struct {
+		X, Y int
+		PrevX, PrevY int
+		Mask     tc.ButtonMask
+		PrevMask tc.ButtonMask
+		HotZone  Zone
+		ActZone  Zone
+		HotID    int
+		ActID int
 	}
 	// This can be used to prevent your main function from returning
 	//	<-fui.ExitSig // Blocks - signal is sent when fui.Exit is set to true.
@@ -47,12 +40,12 @@ var (
 var (
 	Redraw       bool
 	Exit         bool
-	active       bool // Unused
 	layoutLoadOK bool
-	Timestep	 bool
 )
 
-func Init() {
+var ctx *UI
+
+func Init() *UI {
 	// Tcell Setup
 	var err error
 	setCOLORTERM()
@@ -60,7 +53,6 @@ func Init() {
 	scr.Init()
 	scr.EnableMouse()
 	stdin = scr.EventQ()
-	active = true
 
 	// Default layout settings
 	scrW, scrH = scr.Size()
@@ -68,29 +60,51 @@ func Init() {
 	nextButtonPos.Y = scrH - 5
 	nextTerminalPos.X = 3
 	nextTerminalPos.Y = 2
-	nextWatcherPos.X = scrW - 20
-	nextWatcherPos.Y = 2
 	layoutLoadOK, err = loadLayout()
 	if err != nil {
 		fmt.Printf("%v\n", err)
 	}
-	boxes = make([]*Box, 0, 8)
-	deletedBoxes = make([]int, 0, 8)
+
+	INIT_BOXES := 32
+
+	ctx = &UI{
+		Layout: LayoutData{
+			Rects:      make([]Rect   , INIT_BOXES),
+			RectsPrev:  make([]Rect   , INIT_BOXES),
+			Types:      make([]BoxType, INIT_BOXES),
+		},
+		Terms: TerminalData{
+			Buffers:  make([][]byte, INIT_BOXES),
+			Lines:    make([][]Span, INIT_BOXES),
+			Views:    make([]int   , INIT_BOXES),
+			CursorXs: make([]int   , INIT_BOXES),
+			CursorYs: make([]int   , INIT_BOXES),
+		},
+		Buttons: ButtonData{
+			UserCallbacks: make([]uint8, INIT_BOXES),
+		},
+		Txtpads: TxtpadData{
+			Tokens:   make([][]string, INIT_BOXES),
+			Lines:    make([][]Span  , INIT_BOXES),
+			Views:    make([]int     , INIT_BOXES),
+			CursorXs: make([]int     , INIT_BOXES),
+			CursorYs: make([]int     , INIT_BOXES),
+		},
+		Names: make([][32]byte, INIT_BOXES),
+	}
 	frameTick = time.NewTicker(Hz)
-	timesteps = make([]int, 0, 1024)
-	TimestepTick = make(chan any)
 	ExitSig = make(chan any)
+	return ctx
 }
 
 func Start() {
 	defer func() {
-		err := saveLayout()
-		if err != nil {
-			fmt.Printf("%v\n", err)
-		}
+		//err := saveLayout()
+		//if err != nil {
+		//	fmt.Printf("%v\n", err)
+		//}
 		scr.Fini()
 		restoreCOLORTERM()
-		Timestep = false
 		select {
 		case ExitSig <- nil:
 		default:
@@ -98,29 +112,19 @@ func Start() {
 	}()
 
 	if layoutLoadOK {
-		applyRestoredLayout()
+		//applyRestoredLayout()
 	}
 	redrawAll()
-
-	spawnTimestepControls()
 
 	go readInput()
 
 	for !Exit {
-		if !active {
-			time.Sleep(time.Millisecond * 50)
-		}
-		if !Timestep {
-			<-frameTick.C
-			onUpdateAll()
-		} else {
-			<-TimestepTick
-		}
+		<-frameTick.C
+		Redraw = true
 		if Redraw {
 			redrawAll()
 		}
 		scr.Show()
-		frameID++
 	}
 }
 
@@ -130,131 +134,58 @@ func readInput() {
 		if ev == nil {
 			continue
 		}
-		if Timestep {
-			TimestepTick <-nil
-		}
-		// Forgot why we needed this
-		//if time.Since(ev.When()) > time.Millisecond*10 {
-		//	continue
-		//}
 		if mev, ok := ev.(*tc.EventMouse); ok {
-			mouse.x, mouse.y = mev.Position()
-			mouse.mask = mev.Buttons()
-			for _, b := range boxes {
-				if b != nil {
-					b.OnHot(mev)
-				}
-			}
-			mouse.prev.x, mouse.prev.y = mev.Position()
-			mouse.prev.mask = mev.Buttons()
+			Mouse.X, Mouse.Y = mev.Position()
+			Mouse.Mask = mev.Buttons()
+
+			// Find hot id
+			ctx.UpdateMouseState()
+			// We now know which box the mouse
+			// is on, and which zone.
+			// Now, on button, we check hot.
+			ctx.ApplyMouseState()
+			Mouse.PrevX, Mouse.PrevY = mev.Position()
+			Mouse.PrevMask = mev.Buttons()
 		}
 		if key, ok := ev.(*tc.EventKey); ok {
 			switch {
 			case key.Key() == tc.KeyESC:
 				Exit = true
-				active = false
 				return
 
-			case key.Key() == tc.KeyDelete:
-				if focusedIdx == -1 {
-					continue
-				}
-				if boxes[focusedIdx].volatile == false {
-					continue
-				}
-				boxes[focusedIdx] = nil
-				deletedBoxes = append(deletedBoxes, focusedIdx)
-				focusedIdx = -1
-				Redraw = true
-
 			case key.Key() == tc.KeyTAB:
-				for {
-					focusedIdx = calc.WrapInt(focusedIdx+1, len(boxes))
-					if !slices.Contains(deletedBoxes, focusedIdx) {
-						break
-					}
-				}
-				Redraw = true
+			// TODO: Tab targeting
 
 			case focusedIdx == -1:
 				continue
-
-			// Pass keystrokes onto any focused text input field
-			case boxes[focusedIdx].boxType == promptT:
-				switch key.Key() {
-				case tc.KeyEnter:
-					boxes[focusedIdx].OnCR(boxes[focusedIdx])
-					boxes[focusedIdx].Write("\n")
-					boxes[focusedIdx].reflowLines()
-				case tc.KeyBackspace:
-					boxes[focusedIdx].Backspace()
-				default:
-					boxes[focusedIdx].Write(key.Str())
-				}
 			}
 		}
 	}
 }
 
 func onUpdateAll() {
-	for _, b := range boxes {
-		if b != nil {
-			b.OnUpdate()
-		}
-	}
 }
 
 func redrawAll() {
-	if len(boxes) == 0 {
+	if ctx.Count == 0 {
 		Redraw = false
 		return
 	}
 	scr.Clear()
-	for _, b := range boxes {
-		if b != nil {
-			b.border()
-			b.Draw()
-		}
+	for i := range ctx.Count {
+		DrawTerminal(i, ctx)
 	}
-	Redraw = false
+	Redraw = true
 	if focusedIdx == -1 {
 		return
 	}
 	// Draw focused box last
-	boxes[focusedIdx].border()
-	boxes[focusedIdx].Draw()
+	//boxes[focusedIdx].border()
+	//boxes[focusedIdx].Draw()
 }
 
-func spawnTimestepControls() {
-	tty := Terminal("timesteps")
-	Button("Toggle TS", func(b *Box) {
-		tty.Println(fmt.Sprintf("%v", timesteps))
-		if Timestep {
-			Timestep = false
-			timestepView = 0
-			return
-		}
-		Timestep = true
-		timestepView = len(timesteps)-1
-	})
-	Button("<-", func(b *Box) {
-		timestepView--
-		if timestepView < 0 {
-			timestepView = 0
-		}
-		select {
-		case TimestepTick <-nil:
-		default:
-		}
-	})
-	Button("->", func(b *Box) {
-		timestepView++
-		if timestepView >= len(timesteps) {
-			timestepView = len(timesteps)-1
-		}
-		select {
-		case TimestepTick <-nil:
-		default:
-		}
-	})
+func assert(b bool, msg string) {
+	if !b {
+		panic(msg)
+	}
 }

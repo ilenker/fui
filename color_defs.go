@@ -23,6 +23,7 @@ var (
 	stTextLabel      = tc.StyleDefault.Foreground(tc.NewRGBColor(90, 90, 180))
 	stButtonLabel    = tc.StyleDefault.Foreground(tc.NewRGBColor(180, 100, 180))
 	stFieldLabel     = tc.StyleDefault.Foreground(tc.NewRGBColor(180, 180, 100))
+	stBorderFocused  = tc.StyleDefault.Foreground(tc.NewRGBColor(200,   0,   0)).Bold(true)
 )
 
 func setCOLORTERM() {
