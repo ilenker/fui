@@ -81,16 +81,9 @@ func Init() *UI {
 			CursorYs: make([]int   , INIT_BOXES),
 		},
 		Buttons: ButtonData{
-			UserCallbacks: make([]uint8, INIT_BOXES),
+			UserFunctions: make([]uint8, INIT_BOXES),
 		},
-		Txtpads: TxtpadData{
-			Tokens:   make([][]string, INIT_BOXES),
-			Lines:    make([][]Span  , INIT_BOXES),
-			Views:    make([]int     , INIT_BOXES),
-			CursorXs: make([]int     , INIT_BOXES),
-			CursorYs: make([]int     , INIT_BOXES),
-		},
-		Names: make([][32]byte, INIT_BOXES),
+		Names: make([]string, INIT_BOXES),
 	}
 	frameTick = time.NewTicker(Hz)
 	ExitSig = make(chan any)
@@ -172,8 +165,12 @@ func redrawAll() {
 		return
 	}
 	scr.Clear()
-	for i := range ctx.Count {
-		DrawTerminal(i, ctx)
+	for id := range ctx.Count {
+		switch ctx.Layout.Types[id] {
+		case TerminalT:
+			DrawTerminal(id, ctx)
+		case ButtonT:
+		}
 	}
 	Redraw = true
 	if focusedIdx == -1 {
