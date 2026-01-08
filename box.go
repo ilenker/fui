@@ -4,11 +4,12 @@ import (
 	//"fmt"
 	//"strings"
 	//"time"
+	"unicode/utf8"
 
 	. "github.com/ilenker/fui/internal/calc"
 
 	tc "github.com/gdamore/tcell/v3"
-	//rw "github.com/mattn/go-runewidth"
+	rw "github.com/mattn/go-runewidth"
 )
 
 type BoxType int
@@ -148,22 +149,29 @@ func (td *TerminalData) WriteToBuffer(id int, s string) {
 func DrawTerminal(id int, ui *UI) {
 	// Don't try rendering if the width is zero
 	ui.DrawBorder(id)
-	r := ui.Layout.Rects[id]
-	if r.W <= 0 {
+	rect := ui.Layout.Rects[id]
+	if rect.W <= 0 {
 		return
 	}
 	if len(ui.Terms.Buffers[id]) == 0 {
 		return
 	}
-	y := r.Y
-	yLimit := r.Y + r.H - 1
+	y := rect.Y
+	yLimit := rect.Y + rect.H - 1
 	ts := &ui.Terms
+	buf := ts.Buffers[id]
+	cursor := 0
 	for i := ts.Views[id]; i < len(ts.Lines[id]); i++ {
 		l := ts.Lines[id][i]
-		line := ts.Buffers[id][l.Start : l.End]
-		for i, c := range line {
-			scr.SetContent(r.X+i, y, rune(c), nil, stDef)
+		idx := l.Start
+		for idx < l.End {
+			r, size := utf8.DecodeRune(buf[idx:])
+			visualWidth := rw.RuneWidth(r)
+			scr.SetContent(rect.X+cursor, y, r, nil, stDef)
+			idx += size
+			cursor += visualWidth
 		}
+		cursor = 0
 		y++
 		if y > yLimit {
 			break
@@ -174,37 +182,85 @@ func DrawTerminal(id int, ui *UI) {
 func ReflowLines(lines *[]Span, buf []byte, width int) {
 	*lines = (*lines)[:0]
 	lineStart := 0
-	prevWithinLimit := 0
+	prevSafeEnd := 0
 	for i := range buf {
 		if buf[i] == '\n' {
 			*lines = append(*lines, Span{lineStart, i})
 			lineStart = i+1
-			prevWithinLimit = lineStart
+			prevSafeEnd = lineStart
 			continue
 		}
 		currentLineWidth := 1+i-lineStart
 		if buf[i] == ' ' {
 			// Confirm if current line width is within limit
 			if currentLineWidth <= width {
-				prevWithinLimit = i
+				prevSafeEnd = i
 			} else {
-				// Does not fit, use prevWithinLimit as end
-				*lines = append(*lines, Span{lineStart, prevWithinLimit})
-				lineStart = prevWithinLimit+1
-				prevWithinLimit++
+				// Does not fit, use prevSafeEnd as end
+				*lines = append(*lines, Span{lineStart, prevSafeEnd})
+				lineStart = prevSafeEnd+1
+				prevSafeEnd++
 			}
 			continue
 		}
 		if currentLineWidth >= width {
-			if prevWithinLimit == lineStart {
-				prevWithinLimit = i
+			if prevSafeEnd == lineStart {
+				prevSafeEnd = i
 			}
-			*lines = append(*lines, Span{lineStart, prevWithinLimit})
-			lineStart = prevWithinLimit+1
-			prevWithinLimit++
+			*lines = append(*lines, Span{lineStart, prevSafeEnd})
+			lineStart = prevSafeEnd+1
+			prevSafeEnd++
 		}
 	}
 	*lines = append(*lines, Span{lineStart, len(buf)})
+}
+
+func ReflowLinesUTF8(lines *[]Span, buf []byte, maxWidth int) {
+	if maxWidth < 3 {
+		return
+	}
+	*lines = (*lines)[:0]
+	lineStart := 0
+	prevSafeEnd := -1
+	totalVisualWidth := 0
+	idx := 0
+
+	for idx < len(buf) {
+		r, size := utf8.DecodeRune(buf[idx:])
+		visualWidth := rw.RuneWidth(r)
+		if totalVisualWidth + visualWidth >= maxWidth {
+			if prevSafeEnd != -1 {
+				*lines = append(*lines, Span{lineStart, prevSafeEnd})
+				lineStart = prevSafeEnd + 1
+				idx = lineStart
+			} else {
+			// No break opportunities found yet
+				*lines = append(*lines, Span{lineStart, idx})
+				lineStart = idx
+			}
+			totalVisualWidth = 0
+			prevSafeEnd = -1
+			continue
+		}
+		// check for explicit newline
+		if r == '\n' {
+			*lines = append(*lines, Span{lineStart, idx})
+			idx++
+			lineStart = idx
+			prevSafeEnd = -1
+			totalVisualWidth = 0
+			continue
+		}
+		// check for break character
+		if r == ' ' {
+			prevSafeEnd = idx
+		}
+		totalVisualWidth += visualWidth
+		idx += size
+	}
+	if lineStart < len(buf) {
+		*lines = append(*lines, Span{lineStart, len(buf)})
+	}
 }
 
 // Not sure about this yet
@@ -293,7 +349,7 @@ func (ui *UI) ApplyMouseState() {
 				if rect.W != prevW {
 					prevLenLines := len(ui.Terms.Lines[Mouse.ActID])
 					prevView := ui.Terms.Views[Mouse.ActID]
-					ReflowLines(&ui.Terms.Lines[Mouse.ActID], ui.Terms.Buffers[Mouse.ActID], rect.W)
+					ReflowLinesUTF8(&ui.Terms.Lines[Mouse.ActID], ui.Terms.Buffers[Mouse.ActID], rect.W)
 					if prevLenLines == 0 {
 						return
 					}
