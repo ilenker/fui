@@ -1,10 +1,11 @@
 module github.com/ilenker/fui
 
-go 1.25
+go 1.25.5
 
 require (
 	github.com/gdamore/tcell/v3 v3.0.5
 	github.com/mattn/go-runewidth v0.0.19
+	github.com/yuin/goldmark v1.4.13
 )
 
 require (

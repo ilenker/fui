@@ -1,9 +1,8 @@
 package fui
 
 import (
-	//"fmt"
-	//"strings"
-	//"time"
+	"fmt"
+	"math"
 	"unicode/utf8"
 
 	. "github.com/ilenker/fui/internal/calc"
@@ -46,6 +45,15 @@ func (ui *UI) AddTerminal(name string) int {
 	ui.Terms.Buffers[id] = make([]byte, 0, 1024)
 	ui.Terms.Lines[id] = make([]Span, 0, 128)
 	ui.Terms.Views[id] = 0
+	ui.Terms.AttrRanges[id] = AttrRanges{
+			Starts: make([]int, 0, 64),
+			Ends:   make([]int, 0, 64),
+			Attrs:  make([]mdFormatMask, 0, 64),
+			Links:  make(map[int]string, 4),
+		}
+	return id
+}
+
 func (ui *UI) AddButton(name string, userFunction func()) int {
 	id := ui.Count
 	ui.Count++
@@ -62,6 +70,7 @@ var boxFocused = [7]rune{'┏', '┓', '┗', '┛', '┃', '━', '●'}
 
 func (ui *UI) DrawBorder(id int) {
 	rect := ui.Layout.Rects[id]
+	boxType := ui.Layout.Types[id]
 	x, y, w, h := rect.X, rect.Y, rect.W, rect.H
 	var style tc.Style
 	var rs *[7]rune
@@ -71,7 +80,12 @@ func (ui *UI) DrawBorder(id int) {
 		style = stBorderFocused
 		rs = &boxFocused
 	default:
-		style = stTerminalBorder
+		switch boxType {
+		case TerminalT:
+			style = stTerminalBorder
+		case ButtonT:
+			style = stButtonBorder
+		}
 		rs = &boxDefault
 	}
 	// Sides
@@ -138,20 +152,39 @@ type Rect struct {
 }
 
 type Span struct {
-	Start int
-	End   int
+	Start    int
+	End      int
+	TabLevel int
 }
 
 type TerminalData struct {
-	Buffers  [][]byte
-	Lines    [][]Span
-	Views    []int
-	CursorXs []int
-	CursorYs []int
+	Buffers    [][]byte
+	Lines      [][]Span
+	Views      []int
+	AttrRanges []AttrRanges
+	CursorXs   []int
+	CursorYs   []int
 }
 
-func (td *TerminalData) WriteToBuffer(id int, s string) {
-	td.Buffers[id] = append(td.Buffers[id], []byte(s)...)
+type AttrRanges struct {
+	Starts	[]int
+	Ends	[]int
+	Attrs	[]mdFormatMask
+	idx		int
+	Links   map[int]string
+}
+
+func (td *TerminalData) AppendAttrRange(id, start, end int, attr mdFormatMask) {
+	ars := &td.AttrRanges[id]
+	ars.Starts = append(ars.Starts, start)
+	ars.Ends   = append(ars.Ends  , end)
+	ars.Attrs  = append(ars.Attrs , attr)
+	ars.idx++
+}
+
+func (ui *UI) WriteToBuffer(id int, s string) {
+	ui.Terms.Buffers[id] = append(ui.Terms.Buffers[id], []byte(s)...)
+	ReflowLinesUTF8(&ui.Terms.Lines[id], ui.Terms.Buffers[id], ui.Layout.Rects[id].W)
 }
 
 func DrawTerminal(id int, ui *UI) {
@@ -164,18 +197,70 @@ func DrawTerminal(id int, ui *UI) {
 	if len(ui.Terms.Buffers[id]) == 0 {
 		return
 	}
-	y := rect.Y
-	yLimit := rect.Y + rect.H - 1
-	ts := &ui.Terms
-	buf := ts.Buffers[id]
-	cursor := 0
+	attr       := mdFormatMask(0)
+	cursor     := 0
+	attrCursor := 0
+	y          := rect.Y
+	yLimit     := rect.Y + rect.H - 1
+	ts         := &ui.Terms
+	buf        := ts.Buffers[id]
+	meta       := &ts.AttrRanges[id]
+
+	// For each line
 	for i := ts.Views[id]; i < len(ts.Lines[id]); i++ {
 		l := ts.Lines[id][i]
 		idx := l.Start
-		for idx < l.End {
+		// draw indents
+		for range l.TabLevel {
+			for t := range TAB_SIZE {
+				var tab rune
+				tab = rune('0'+t)
+				tab = ' '
+				scr.SetContent(
+					rect.X+cursor, y, tab, nil,
+					stDef,
+					)
+				cursor++
+			}
+		}
+		
+		// Range Setup: find range that ends after byte index
+		for attrCursor < len(meta.Starts) && meta.Ends[attrCursor] <= idx {
+			attrCursor++
+		}
+		// Check if we are in a range
+		if attrCursor < len(meta.Starts) && meta.Starts[attrCursor] <= idx {
+			attr = meta.Attrs[attrCursor]
+		} else {
+			attr = 0
+		}
+
+		// For each rune in line
+		for i := 0; idx < l.End; i++ {
+			for attrCursor < len(meta.Starts) {
+				isInside := (attr != 0)
+				if isInside {
+					if idx == meta.Ends[attrCursor] {
+						attr = 0
+						attrCursor++ 
+						continue 
+					}
+				} else {
+					if idx == meta.Starts[attrCursor] {
+						attr = meta.Attrs[attrCursor]
+						continue 
+					}
+				}
+				break
+			}
 			r, size := utf8.DecodeRune(buf[idx:])
 			visualWidth := rw.RuneWidth(r)
-			scr.SetContent(rect.X+cursor, y, r, nil, stDef)
+			//attrClean, isLink := ProcessAttr(attr)
+			st := AttrToStyle(attr)
+			scr.SetContent(
+				rect.X+cursor, y, r, nil,
+				st,
+			)
 			idx += size
 			cursor += visualWidth
 		}
@@ -187,38 +272,6 @@ func DrawTerminal(id int, ui *UI) {
 	}
 }
 
-func ReflowLines(lines *[]Span, buf []byte, width int) {
-	*lines = (*lines)[:0]
-	lineStart := 0
-	prevSafeEnd := 0
-	for i := range buf {
-		if buf[i] == '\n' {
-			*lines = append(*lines, Span{lineStart, i})
-			lineStart = i+1
-			prevSafeEnd = lineStart
-			continue
-		}
-		currentLineWidth := 1+i-lineStart
-		if buf[i] == ' ' {
-			// Confirm if current line width is within limit
-			if currentLineWidth <= width {
-				prevSafeEnd = i
-			} else {
-				// Does not fit, use prevSafeEnd as end
-				*lines = append(*lines, Span{lineStart, prevSafeEnd})
-				lineStart = prevSafeEnd+1
-				prevSafeEnd++
-			}
-			continue
-		}
-		if currentLineWidth >= width {
-			if prevSafeEnd == lineStart {
-				prevSafeEnd = i
-			}
-			*lines = append(*lines, Span{lineStart, prevSafeEnd})
-			lineStart = prevSafeEnd+1
-			prevSafeEnd++
-		}
 func DrawButton(id int, ui *UI) {
 	// Don't try rendering if the width is zero
 	ui.DrawBorder(id)
@@ -230,51 +283,113 @@ func DrawButton(id int, ui *UI) {
 	scr.PutStr(rect.X, rect.Y, s)
 }
 
+//func ReflowLines_(lines *[]Span, buf []byte, width int) {
+//	// Clear lines for overwrite
+//	*lines = (*lines)[:0]
+//	lineStart := 0
+//	prevSafeEnd := 0
+//	for i := range buf {
+//		if buf[i] == '\n' {
+//			*lines = append(*lines, Span{lineStart, i})
+//			lineStart = i+1
+//			prevSafeEnd = lineStart
+//			continue
+//		}
+//		currentLineWidth := 1+i-lineStart
+//		if buf[i] == ' ' {
+//			// Confirm if current line width is within limit
+//			if currentLineWidth <= width {
+//				prevSafeEnd = i
+//			} else {
+//				// Does not fit, use prevSafeEnd as end
+//				*lines = append(*lines, Span{lineStart, prevSafeEnd})
+//				lineStart = prevSafeEnd+1
+//				prevSafeEnd++
+//			}
+//			continue
+//		}
+//		if currentLineWidth >= width {
+//			if prevSafeEnd == lineStart {
+//				prevSafeEnd = i
+//			}
+//			*lines = append(*lines, Span{lineStart, prevSafeEnd})
+//			lineStart = prevSafeEnd+1
+//			prevSafeEnd++
+//		}
+//	}
+//	*lines = append(*lines, Span{lineStart, len(buf)})
+//}
+
+const TAB_SIZE = 4
+
 func ReflowLinesUTF8(lines *[]Span, buf []byte, maxWidth int) {
 	if maxWidth < 3 {
 		return
 	}
+	// Clear line len for overwrite
 	*lines = (*lines)[:0]
+	runeIdx := 0
+	tabLevel := 0
 	lineStart := 0
-	prevSafeEnd := -1
-	totalVisualWidth := 0
-	idx := 0
+	safeLineEnd := -1
+	runningTotalVisualWidth := 0
 
-	for idx < len(buf) {
-		r, size := utf8.DecodeRune(buf[idx:])
-		visualWidth := rw.RuneWidth(r)
-		if totalVisualWidth + visualWidth >= maxWidth {
-			if prevSafeEnd != -1 {
-				*lines = append(*lines, Span{lineStart, prevSafeEnd})
-				lineStart = prevSafeEnd + 1
-				idx = lineStart
+	for runeIdx < len(buf) {
+		var visualWidth int
+		r, byteWidth := utf8.DecodeRune(buf[runeIdx:])
+		visualWidth = rw.RuneWidth(r)
+		totalTabSpace := tabLevel*TAB_SIZE
+		maybeNewWidth := runningTotalVisualWidth + visualWidth + totalTabSpace
+
+		if buf[runeIdx] == '\t' {
+			if maybeNewWidth + TAB_SIZE + 1 < maxWidth {
+				tabLevel++
+			} else {
+				tabLevel = 0
+			}
+			//visualWidth = TAB_SIZE
+		} else {
+		}
+
+		if maybeNewWidth >= maxWidth {
+			if safeLineEnd != -1 {
+				*lines = append(*lines, Span{lineStart, safeLineEnd, tabLevel})
+				lineStart = safeLineEnd + 1
+				runeIdx = lineStart
 			} else {
 			// No break opportunities found yet
-				*lines = append(*lines, Span{lineStart, idx})
-				lineStart = idx
+				*lines = append(*lines, Span{lineStart, runeIdx, tabLevel})
+				lineStart = runeIdx
 			}
-			totalVisualWidth = 0
-			prevSafeEnd = -1
+			runningTotalVisualWidth = 0
+			safeLineEnd = -1
 			continue
 		}
-		// check for explicit newline
+		// Check non-printables
 		if r == '\n' {
-			*lines = append(*lines, Span{lineStart, idx})
-			idx++
-			lineStart = idx
-			prevSafeEnd = -1
-			totalVisualWidth = 0
+			*lines = append(*lines, Span{lineStart, runeIdx, tabLevel})
+			runeIdx += byteWidth
+			lineStart = runeIdx
+			safeLineEnd = -1
+			runningTotalVisualWidth = 0
+			tabLevel = 0
+			//tabLevel = max(0, tabLevel-1)
 			continue
 		}
-		// check for break character
-		if r == ' ' {
-			prevSafeEnd = idx
+		//if r == '\t' {
+		//	runeIdx++
+		//	continue
+		//}
+		// Check for break character (space, dash, anything else specified)
+		if r == ' ' /*|| r == '-'*/ {
+			safeLineEnd = runeIdx
 		}
-		totalVisualWidth += visualWidth
-		idx += size
+		runningTotalVisualWidth += visualWidth
+		runeIdx += byteWidth
 	}
+	// Clean up, add last line
 	if lineStart < len(buf) {
-		*lines = append(*lines, Span{lineStart, len(buf)})
+		*lines = append(*lines, Span{lineStart, len(buf), tabLevel})
 	}
 }
 
@@ -321,6 +436,12 @@ func (ui *UI) UpdateMouseState() {
 	for i := ui.Count; i >= 0; i-- {
 		zone := rects[i].WhichZone(mx, my)
 		if zone != ZoneNone {
+			switch zone {
+			case ZoneInside:
+				if ui.Layout.Types[i] == TerminalT {
+					ui.FindAndHighlightRange(i, mx, my)
+				}
+			}
 			Mouse.HotID = i
 			Mouse.HotZone = zone
 			return
@@ -341,6 +462,7 @@ func (ui *UI) ApplyMouseState() {
 		if Mouse.PrevMask != tc.Button1 {
 			Mouse.ActID = Mouse.HotID
 			Mouse.ActZone = Mouse.HotZone
+			focusedIdx = Mouse.ActID
 			return
 		}
 		if Mouse.PrevMask == tc.Button1 {
@@ -373,7 +495,7 @@ func (ui *UI) ApplyMouseState() {
 					}
 					ratio := float64(prevView) / float64(prevLenLines)
 					adjustedView := float64(len(ui.Terms.Lines[Mouse.ActID])) * ratio
-					ui.Terms.Views[Mouse.ActID] = int(adjustedView)
+					ui.Terms.Views[Mouse.ActID] = int(math.Round(adjustedView))
 				}
 			}
 		}
@@ -420,6 +542,36 @@ func (r *Rect) WhichZone(mX, mY int) Zone {
 	case mX == rX2 && mY == rY2:
 		return ZoneBotR
 	default:
-	return ZoneInside
+		return ZoneInside
+	}
+}
+
+func (ui *UI) FindAndHighlightRange(id, mX, mY int) {
+	lines := ui.Terms.Lines[id]
+	rect  := ui.Layout.Rects[id]
+	view  := ui.Terms.Views[id]
+	ars   := ui.Terms.AttrRanges[id]
+	x := mX-rect.X
+	y := mY-rect.Y
+	lineIdx := y + view
+	if lineIdx < 0 || lineIdx >= len(lines) {
+		return
+	}
+	lineStartByte := lines[lineIdx].Start
+	cursorByte    := lineStartByte + x
+
+	for i := range ars.idx {
+		ars.Attrs[i] &= ^HILITE
+		switch {
+		case cursorByte < ars.Starts[i]:
+			continue
+		case (i+1 < ars.idx) && cursorByte >= ars.Starts[i+1]:
+			continue
+		case cursorByte < ars.Ends[i]:
+			if ars.Attrs[i] & LINK != 0 {
+				ars.Attrs[i] |= HILITE
+				debugString[0] = fmt.Sprintf("link: [%50s]", ars.Links[i+1])
+			}
+		}
 	}
 }

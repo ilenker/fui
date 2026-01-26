@@ -47,7 +47,6 @@ var ctx *UI
 
 func Init() *UI {
 	// Tcell Setup
-	var err error
 	setCOLORTERM()
 	scr, _ = tc.NewScreen()
 	scr.Init()
@@ -74,11 +73,12 @@ func Init() *UI {
 			Types:      make([]BoxType, INIT_BOXES),
 		},
 		Terms: TerminalData{
-			Buffers:  make([][]byte, INIT_BOXES),
-			Lines:    make([][]Span, INIT_BOXES),
-			Views:    make([]int   , INIT_BOXES),
-			CursorXs: make([]int   , INIT_BOXES),
-			CursorYs: make([]int   , INIT_BOXES),
+			Buffers:    make([][]byte, INIT_BOXES),
+			Lines:      make([][]Span, INIT_BOXES),
+			Views:      make([]int   , INIT_BOXES),
+			AttrRanges: make([]AttrRanges, INIT_BOXES),
+			CursorXs:   make([]int   , INIT_BOXES),
+			CursorYs:   make([]int   , INIT_BOXES),
 		},
 		Buttons: ButtonData{
 			UserFunctions: make([]func(), INIT_BOXES),
