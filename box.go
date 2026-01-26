@@ -46,6 +46,14 @@ func (ui *UI) AddTerminal(name string) int {
 	ui.Terms.Buffers[id] = make([]byte, 0, 1024)
 	ui.Terms.Lines[id] = make([]Span, 0, 128)
 	ui.Terms.Views[id] = 0
+func (ui *UI) AddButton(name string, userFunction func()) int {
+	id := ui.Count
+	ui.Count++
+	ui.Layout.Rects[id] = Rect{ X: 5, Y: 5, W: len(name), H: 1, }
+	ui.Layout.RectsPrev[id] = Rect{ X: 5, Y: 5, W: len(name), H: 1, }
+	ui.Layout.Types[id] = ButtonT
+	ui.Names[id] = name
+	ui.Buttons.UserFunctions[id] = userFunction
 	return id
 }
 
@@ -211,8 +219,15 @@ func ReflowLines(lines *[]Span, buf []byte, width int) {
 			lineStart = prevSafeEnd+1
 			prevSafeEnd++
 		}
+func DrawButton(id int, ui *UI) {
+	// Don't try rendering if the width is zero
+	ui.DrawBorder(id)
+	rect := ui.Layout.Rects[id]
+	if rect.W <= 0 {
+		return
 	}
-	*lines = append(*lines, Span{lineStart, len(buf)})
+	s := ui.Names[id]
+	scr.PutStr(rect.X, rect.Y, s)
 }
 
 func ReflowLinesUTF8(lines *[]Span, buf []byte, maxWidth int) {
@@ -265,7 +280,7 @@ func ReflowLinesUTF8(lines *[]Span, buf []byte, maxWidth int) {
 
 // Not sure about this yet
 type ButtonData struct {
-	UserFunctions []uint8
+	UserFunctions []func()
 }
 
 type Box struct {
@@ -336,6 +351,9 @@ func (ui *UI) ApplyMouseState() {
 				rect.X = Mouse.X+1
 				rect.Y = Mouse.Y+1
 			case ZoneBotR:
+				if ui.Layout.Types[Mouse.ActID] == ButtonT {
+					return
+				}
 				rect := &ui.Layout.Rects[Mouse.ActID]
 				prevW := rect.W
 				rect.W = Mouse.X - rect.X
@@ -374,6 +392,14 @@ func (ui *UI) ApplyMouseState() {
 			}
 		}
 	case tc.ButtonNone:
+		if Mouse.PrevMask == tc.Button1 {
+			if Mouse.HotID != -1 {
+				if ui.Layout.Types[Mouse.HotID] == ButtonT {
+					ui.Buttons.UserFunctions[Mouse.HotID]()
+					Redraw = true
+				}
+			}
+		}
 		Mouse.ActID = -1
 		Mouse.ActZone = ZoneNone
 	}

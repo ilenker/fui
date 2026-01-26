@@ -60,10 +60,10 @@ func Init() *UI {
 	nextButtonPos.Y = scrH - 5
 	nextTerminalPos.X = 3
 	nextTerminalPos.Y = 2
-	layoutLoadOK, err = loadLayout()
-	if err != nil {
-		fmt.Printf("%v\n", err)
-	}
+	//layoutLoadOK, err = loadLayout()
+	//if err != nil {
+	//	fmt.Printf("%v\n", err)
+	//}
 
 	INIT_BOXES := 32
 
@@ -81,7 +81,7 @@ func Init() *UI {
 			CursorYs: make([]int   , INIT_BOXES),
 		},
 		Buttons: ButtonData{
-			UserFunctions: make([]uint8, INIT_BOXES),
+			UserFunctions: make([]func(), INIT_BOXES),
 		},
 		Names: make([]string, INIT_BOXES),
 	}
@@ -170,6 +170,7 @@ func redrawAll() {
 		case TerminalT:
 			DrawTerminal(id, ctx)
 		case ButtonT:
+			DrawButton(id, ctx)
 		}
 	}
 	Redraw = true
