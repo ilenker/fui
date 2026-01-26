@@ -1,7 +1,6 @@
 package fui
 
 import (
-	"fmt"
 	"time"
 
 	tc "github.com/gdamore/tcell/v3"
@@ -34,6 +33,8 @@ var (
 	// This can be used to prevent your main function from returning
 	//	<-fui.ExitSig // Blocks - signal is sent when fui.Exit is set to true.
 	ExitSig chan interface{}
+
+	debugString = make([]string, 32)
 )
 
 // Global state
@@ -117,6 +118,7 @@ func Start() {
 		if Redraw {
 			redrawAll()
 		}
+		debugDisplay()
 		scr.Show()
 	}
 }
@@ -185,5 +187,11 @@ func redrawAll() {
 func assert(b bool, msg string) {
 	if !b {
 		panic(msg)
+	}
+}
+
+func debugDisplay() {
+	for i, s := range debugString {
+		scr.PutStr(0, i, s)
 	}
 }
