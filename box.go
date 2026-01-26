@@ -205,6 +205,7 @@ func DrawTerminal(id int, ui *UI) {
 	ts         := &ui.Terms
 	buf        := ts.Buffers[id]
 	meta       := &ts.AttrRanges[id]
+	lineBreak  := false
 
 	// For each line
 	for i := ts.Views[id]; i < len(ts.Lines[id]); i++ {
@@ -236,7 +237,7 @@ func DrawTerminal(id int, ui *UI) {
 		}
 
 		// For each rune in line
-		for i := 0; idx < l.End; i++ {
+		for idx < l.End {
 			for attrCursor < len(meta.Starts) {
 				isInside := (attr != 0)
 				if isInside {
@@ -257,15 +258,23 @@ func DrawTerminal(id int, ui *UI) {
 			visualWidth := rw.RuneWidth(r)
 			//attrClean, isLink := ProcessAttr(attr)
 			st := AttrToStyle(attr)
-			scr.SetContent(
-				rect.X+cursor, y, r, nil,
-				st,
-			)
+			if r == '\n' {
+				y++
+				lineBreak = true
+			} else {
+				scr.SetContent(
+					rect.X+cursor, y, r, nil,
+					st,
+					)
+				lineBreak = false
+			}
 			idx += size
 			cursor += visualWidth
 		}
 		cursor = 0
-		y++
+		if !lineBreak {
+			y++
+		}
 		if y > yLimit {
 			break
 		}
@@ -357,7 +366,7 @@ func ReflowLinesUTF8(lines *[]Span, buf []byte, maxWidth int) {
 				lineStart = safeLineEnd + 1
 				runeIdx = lineStart
 			} else {
-			// No break opportunities found yet
+				// No break opportunities found yet
 				*lines = append(*lines, Span{lineStart, runeIdx, tabLevel})
 				lineStart = runeIdx
 			}
@@ -367,8 +376,12 @@ func ReflowLinesUTF8(lines *[]Span, buf []byte, maxWidth int) {
 		}
 		// Check non-printables
 		if r == '\n' {
+			for (runeIdx+1 < len(buf) &&
+				buf[runeIdx+1] == '\n') {
+				runeIdx += 1
+			}
+			runeIdx += 1
 			*lines = append(*lines, Span{lineStart, runeIdx, tabLevel})
-			runeIdx += byteWidth
 			lineStart = runeIdx
 			safeLineEnd = -1
 			runningTotalVisualWidth = 0
