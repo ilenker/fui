@@ -10,6 +10,8 @@ import (
 	tc "github.com/gdamore/tcell/v3"
 	rw "github.com/mattn/go-runewidth"
 )
+var foo = fmt.Sprintf("")
+
 
 type BoxType int
 
@@ -35,6 +37,34 @@ type LayoutData struct {
 	Types     []BoxType
 }
 
+type TerminalData struct {
+	Buffers       [][]byte
+	ShadowBuffers [][]byte
+	Lines         [][]Span
+	Views         []int
+	LinkRanges    []LinkRanges
+	Links         []map[int]string
+	CursorXs      []int
+	CursorYs      []int
+}
+
+type LinkRanges struct {
+	Starts	[]int
+	Ends	[]int
+	Data    []string
+	idx		int
+}
+
+type Rect struct {
+	X, Y, W, H int
+}
+
+type Span struct {
+	Start    int
+	End      int
+	TabLevel int
+}
+
 func (ui *UI) AddTerminal(name string) int {
 	id := ui.Count
 	ui.Count++
@@ -42,14 +72,14 @@ func (ui *UI) AddTerminal(name string) int {
 	ui.Layout.RectsPrev[id] = Rect{ X: 5, Y: 5, W: 10, H: 10, }
 	ui.Layout.Types[id] = TerminalT
 	ui.Names[id] = name
-	ui.Terms.Buffers[id] = make([]byte, 0, 1024)
+	ui.Terms.Buffers[id]       = make([]byte, 0, 1024)
+	ui.Terms.ShadowBuffers[id] = make([]byte, 0, 1024)
 	ui.Terms.Lines[id] = make([]Span, 0, 128)
 	ui.Terms.Views[id] = 0
-	ui.Terms.AttrRanges[id] = AttrRanges{
+	ui.Terms.LinkRanges[id] = LinkRanges{
 			Starts: make([]int, 0, 64),
 			Ends:   make([]int, 0, 64),
-			Attrs:  make([]mdFormatMask, 0, 64),
-			Links:  make(map[int]string, 4),
+			Data:   make([]string, 0, 64),
 		}
 	return id
 }
@@ -147,43 +177,12 @@ func (ui *UI) DrawBorder(id int) {
 	}
 }
 
-type Rect struct {
-	X, Y, W, H int
-}
-
-type Span struct {
-	Start    int
-	End      int
-	TabLevel int
-}
-
-type TerminalData struct {
-	Buffers    [][]byte
-	Lines      [][]Span
-	Views      []int
-	AttrRanges []AttrRanges
-	CursorXs   []int
-	CursorYs   []int
-}
-
-type AttrRanges struct {
-	Starts	[]int
-	Ends	[]int
-	Attrs	[]mdFormatMask
-	idx		int
-	Links   map[int]string
-}
-
-func (td *TerminalData) AppendAttrRange(id, start, end int, attr mdFormatMask) {
-	ars := &td.AttrRanges[id]
-	ars.Starts = append(ars.Starts, start)
-	ars.Ends   = append(ars.Ends  , end)
-	ars.Attrs  = append(ars.Attrs , attr)
-	ars.idx++
-}
 
 func (ui *UI) WriteToBuffer(id int, s string) {
 	ui.Terms.Buffers[id] = append(ui.Terms.Buffers[id], []byte(s)...)
+
+	ui.Terms.ShadowBuffers[id] = append(ui.Terms.ShadowBuffers[id], make([]byte, len(s))...)
+
 	ReflowLinesUTF8(&ui.Terms.Lines[id], ui.Terms.Buffers[id], ui.Layout.Rects[id].W)
 }
 
@@ -197,15 +196,14 @@ func DrawTerminal(id int, ui *UI) {
 	if len(ui.Terms.Buffers[id]) == 0 {
 		return
 	}
-	attr       := mdFormatMask(0)
 	cursor     := 0
-	attrCursor := 0
 	y          := rect.Y
 	yLimit     := rect.Y + rect.H - 1
 	ts         := &ui.Terms
 	buf        := ts.Buffers[id]
-	meta       := &ts.AttrRanges[id]
+	shadBuf    := ts.ShadowBuffers[id]
 	lineBreak  := false
+	style	   := tc.Style{}
 
 	// For each line
 	for i := ts.Views[id]; i < len(ts.Lines[id]); i++ {
@@ -214,57 +212,31 @@ func DrawTerminal(id int, ui *UI) {
 		// draw indents
 		for range l.TabLevel {
 			for t := range TAB_SIZE {
-				var tab rune
-				tab = rune('0'+t)
-				tab = ' '
+				var r rune
+				r = rune('0'+t)
+				r = ' '
 				scr.SetContent(
-					rect.X+cursor, y, tab, nil,
+					rect.X+cursor, y, r, nil,
 					stDef,
 					)
 				cursor++
 			}
 		}
 		
-		// Range Setup: find range that ends after byte index
-		for attrCursor < len(meta.Starts) && meta.Ends[attrCursor] <= idx {
-			attrCursor++
-		}
-		// Check if we are in a range
-		if attrCursor < len(meta.Starts) && meta.Starts[attrCursor] <= idx {
-			attr = meta.Attrs[attrCursor]
-		} else {
-			attr = 0
-		}
-
 		// For each rune in line
 		for idx < l.End {
-			for attrCursor < len(meta.Starts) {
-				isInside := (attr != 0)
-				if isInside {
-					if idx == meta.Ends[attrCursor] {
-						attr = 0
-						attrCursor++ 
-						continue 
-					}
-				} else {
-					if idx == meta.Starts[attrCursor] {
-						attr = meta.Attrs[attrCursor]
-						continue 
-					}
-				}
-				break
-			}
 			r, size := utf8.DecodeRune(buf[idx:])
 			visualWidth := rw.RuneWidth(r)
 			//attrClean, isLink := ProcessAttr(attr)
-			st := AttrToStyle(attr)
+			attr := mdFormatMask(shadBuf[idx])
+			style = AttrToStyle(attr)
 			if r == '\n' {
 				y++
 				lineBreak = true
 			} else {
 				scr.SetContent(
 					rect.X+cursor, y, r, nil,
-					st,
+					style,
 					)
 				lineBreak = false
 			}
@@ -455,6 +427,16 @@ func (ui *UI) UpdateMouseState() {
 			return
 		}
 	}
+
+	if DEBUG {
+		zone := rects[DEBUG_TTY].WhichZone(mx, my)
+		if zone != ZoneNone {
+			Mouse.HotID = DEBUG_TTY
+			Mouse.HotZone = zone
+			return
+		}
+	}
+
 	Mouse.HotID = -1
 	Mouse.HotZone = ZoneNone
 }
@@ -555,8 +537,8 @@ func (r *Rect) WhichZone(mX, mY int) Zone {
 }
 
 var lastHiliteIdx int
-// TODO(Johan): Make more efficient
 func (ui *UI) FindAndHighlightRange(id, mX, mY int) {
+	/*
 	lines := ui.Terms.Lines[id]
 	rect  := ui.Layout.Rects[id]
 	view  := ui.Terms.Views[id]
@@ -566,15 +548,12 @@ func (ui *UI) FindAndHighlightRange(id, mX, mY int) {
 	lineIdx := y + view
 	if lineIdx < 0 || lineIdx >= len(lines) {
 		return
-	}
+	} 
 	startByte := lines[lineIdx].Start
 	endByte   := lines[lineIdx].End
 	indentWidth  :=  lines[lineIdx].TabLevel*(TAB_SIZE)
 	cursorCell := x-indentWidth
 	cursorByte := ui.Terms.nthCellInLineToByteIndex(id, cursorCell, startByte, endByte)
-	if cursorByte == -1 {
-		panic("ahhh")
-	}
 	debugString[1] = fmt.Sprintf("cursorCell: [%5d]", cursorCell)
 	debugString[2] = fmt.Sprintf("cursorByte: [%5d]", cursorByte)
 
@@ -591,10 +570,10 @@ func (ui *UI) FindAndHighlightRange(id, mX, mY int) {
 				ars.Attrs[i] & LINK != 0 {
 				ars.Attrs[i] |= HILITE
 				i++
-				debugString[0] = fmt.Sprintf("link: [%50s]", ars.Links[i])
 			}
 		}
-	}
+	} 
+	*/
 }
 
 func (td *TerminalData) nthCellInLineToByteIndex(id, nthCell, startByteIdx, endByteIdx int) int {
