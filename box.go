@@ -376,17 +376,12 @@ func ReflowLinesUTF8(lines *[]Span, buf []byte, maxWidth int) {
 		}
 		// Check non-printables
 		if r == '\n' {
-			for (runeIdx+1 < len(buf) &&
-				buf[runeIdx+1] == '\n') {
-				runeIdx += 1
-			}
 			runeIdx += 1
 			*lines = append(*lines, Span{lineStart, runeIdx, tabLevel})
 			lineStart = runeIdx
 			safeLineEnd = -1
 			runningTotalVisualWidth = 0
 			tabLevel = 0
-			//tabLevel = max(0, tabLevel-1)
 			continue
 		}
 		//if r == '\t' {
@@ -559,6 +554,8 @@ func (r *Rect) WhichZone(mX, mY int) Zone {
 	}
 }
 
+var lastHiliteIdx int
+// TODO(Johan): Make more efficient
 func (ui *UI) FindAndHighlightRange(id, mX, mY int) {
 	lines := ui.Terms.Lines[id]
 	rect  := ui.Layout.Rects[id]
@@ -570,10 +567,19 @@ func (ui *UI) FindAndHighlightRange(id, mX, mY int) {
 	if lineIdx < 0 || lineIdx >= len(lines) {
 		return
 	}
-	lineStartByte := lines[lineIdx].Start
-	cursorByte    := lineStartByte + x
+	startByte := lines[lineIdx].Start
+	endByte   := lines[lineIdx].End
+	indentWidth  :=  lines[lineIdx].TabLevel*(TAB_SIZE)
+	cursorCell := x-indentWidth
+	cursorByte := ui.Terms.nthCellInLineToByteIndex(id, cursorCell, startByte, endByte)
+	if cursorByte == -1 {
+		panic("ahhh")
+	}
+	debugString[1] = fmt.Sprintf("cursorCell: [%5d]", cursorCell)
+	debugString[2] = fmt.Sprintf("cursorByte: [%5d]", cursorByte)
 
-	for i := range ars.idx {
+	for i := 0; i < ars.idx; i++ {
+		// Reset hilite
 		ars.Attrs[i] &= ^HILITE
 		switch {
 		case cursorByte < ars.Starts[i]:
@@ -581,9 +587,11 @@ func (ui *UI) FindAndHighlightRange(id, mX, mY int) {
 		case (i+1 < ars.idx) && cursorByte >= ars.Starts[i+1]:
 			continue
 		case cursorByte < ars.Ends[i]:
-			if ars.Attrs[i] & LINK != 0 {
+			for i < ars.idx &&
+				ars.Attrs[i] & LINK != 0 {
 				ars.Attrs[i] |= HILITE
-				debugString[0] = fmt.Sprintf("link: [%50s]", ars.Links[i+1])
+				i++
+				debugString[0] = fmt.Sprintf("link: [%50s]", ars.Links[i])
 			}
 		}
 	}
