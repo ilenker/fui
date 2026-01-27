@@ -588,3 +588,21 @@ func (ui *UI) FindAndHighlightRange(id, mX, mY int) {
 		}
 	}
 }
+
+func (td *TerminalData) nthCellInLineToByteIndex(id, nthCell, startByteIdx, endByteIdx int) int {
+	cellIndex := 0
+	if startByteIdx == endByteIdx {
+		return 0
+	}
+	for i := startByteIdx; i < endByteIdx; {
+		r, byteSize := utf8.DecodeRune(td.Buffers[id][i:])
+		vw := rw.RuneWidth(r)
+		cellIndex += vw
+		if nthCell <  cellIndex &&
+		   nthCell >= cellIndex-vw {
+			return i
+		}
+		i += byteSize
+	}
+	return 0
+}
